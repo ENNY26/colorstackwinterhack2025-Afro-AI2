@@ -8,12 +8,17 @@ import {
   Dimensions,
   ScrollView,
   Modal,
+  Alert,
+  ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
+import * as Speech from 'expo-speech';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
-import { CULTURAL_TIPS_YORUBA, SUGGESTED_RESPONSES } from '../constants/mockData';
 import HelpMeRespondModal from '../components/HelpMeRespondModal';
+import { conversationAPI, audioAPI, tipsAPI, vocabularyAPI, authAPI, API_BASE } from '../services';
 
 const { width, height } = Dimensions.get('window');
 
@@ -26,13 +31,31 @@ const STATES = {
 };
 
 const ConversationScreen = ({ navigation, route }) => {
-  const { language, personality } = route.params || {};
+  const { language: paramLanguage, personality: paramPersonality, conversationType, plan, sessionMinutes } = route.params || {};
+  const language = paramLanguage || (plan && { id: plan.language, name: plan.languageName, flag: plan.flag || '🇳🇬' }) || null;
+  const personality = paramPersonality || (plan?.personality ? { id: plan.personality } : null) || { id: 'friendly' };
+  const isRoleplay = !!conversationType;
   const [conversationState, setConversationState] = useState(STATES.IDLE);
   const [currentTipIndex, setCurrentTipIndex] = useState(0);
   const [transcript, setTranscript] = useState('');
   const [showTranscript, setShowTranscript] = useState(false);
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [vocabCount, setVocabCount] = useState(12);
+  const [timeLeft, setTimeLeft] = useState(
+    isRoleplay && sessionMinutes ? sessionMinutes * 60 : null
+  );
+  
+  // Backend integration state
+  const [conversationId, setConversationId] = useState(null);
+  const [recording, setRecording] = useState(null);
+  const [sound, setSound] = useState(null);
+  const [culturalTips, setCulturalTips] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [suggestedResponses, setSuggestedResponses] = useState([]);
+  const isSessionOver = isRoleplay && timeLeft !== null && timeLeft <= 0;
+  const [hasEnded, setHasEnded] = useState(false);
+  const [ending, setEnding] = useState(false);
 
   // Animation values
   const waveScale = useRef(new Animated.Value(1)).current;
@@ -47,8 +70,29 @@ const ConversationScreen = ({ navigation, route }) => {
   const wave2 = useRef(new Animated.Value(0)).current;
   const wave3 = useRef(new Animated.Value(0)).current;
 
+  // Initialize conversation and load cultural tips
+  useEffect(() => {
+    initializeConversation();
+    loadCulturalTips();
+    loadVocabularyStats();
+    
+    return () => {
+      // Cleanup audio on unmount
+      if (sound) {
+        sound.unloadAsync().catch(err => console.log('Error unloading sound:', err));
+      }
+      if (recording) {
+        recording.stopAndUnloadAsync().catch(err => console.log('Error stopping recording:', err));
+      }
+      // Stop any speech
+      Speech.stop();
+    };
+  }, []);
+
   // Auto-rotate cultural tips
   useEffect(() => {
+    if (culturalTips.length === 0) return;
+    
     const tipInterval = setInterval(() => {
       Animated.sequence([
         Animated.timing(tipOpacity, {
@@ -62,11 +106,356 @@ const ConversationScreen = ({ navigation, route }) => {
           useNativeDriver: true,
         }),
       ]).start();
-      setCurrentTipIndex((prev) => (prev + 1) % CULTURAL_TIPS_YORUBA.length);
+      setCurrentTipIndex((prev) => (prev + 1) % culturalTips.length);
     }, 8000);
 
     return () => clearInterval(tipInterval);
-  }, []);
+  }, [culturalTips]);
+
+  // Countdown timer for roleplay sessions
+  useEffect(() => {
+    if (!isRoleplay || !timeLeft || timeLeft <= 0) return;
+    const interval = setInterval(() => {
+      setTimeLeft((prev) => {
+        if (prev === null || prev <= 1) {
+          clearInterval(interval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isRoleplay, timeLeft]);
+
+  // Finish roleplay session on timer end
+  useEffect(() => {
+    if (!isRoleplay || !isSessionOver || !conversationId || hasEnded) return;
+    finishRoleplaySession(true);
+  }, [isRoleplay, isSessionOver, conversationId, hasEnded]);
+
+  const finishRoleplaySession = async (auto = false) => {
+    if (!conversationId || hasEnded || ending) return;
+    try {
+      setEnding(true);
+      // End conversation on backend and get summary
+      const endResp = await conversationAPI.endConversation(conversationId);
+      const summary = endResp?.data?.summary ?? null;
+      // Fetch full conversation to show what user and AI said
+      const convResp = await conversationAPI.getConversation(conversationId);
+      const fullConv = convResp?.data?.conversation ?? {};
+      const messages = fullConv.messages || [];
+      const userMessages = messages.filter((m) => m.role === 'user');
+      const aiMessages = messages.filter((m) => m.role === 'assistant');
+
+      setHasEnded(true);
+      navigation.navigate('RoleplaySummary', {
+        summary,
+        userMessages,
+        aiMessages,
+        language,
+        conversationType,
+      });
+    } catch (err) {
+      console.error('Failed to finish roleplay session:', err);
+    } finally {
+      setEnding(false);
+    }
+  };
+
+  // Initialize conversation with backend
+  const initializeConversation = async () => {
+    try {
+      setLoading(true);
+      
+      // Ensure user is authenticated first
+      const isAuth = await authAPI.ensureAuthenticated();
+      if (!isAuth) {
+        setError('Authentication failed. Please try again.');
+        Alert.alert(
+          'Authentication Error',
+          'Failed to authenticate. Please ensure the backend server is running.'
+        );
+        return;
+      }
+      
+      const result = await conversationAPI.startConversation(
+        language?.id || 'yoruba',
+        personality?.id || 'friendly',
+        conversationType || undefined
+      );
+      
+      if (result.success && result.data.conversation) {
+        setConversationId(result.data.conversation.id);
+        
+        // Show initial AI greeting
+        const initialMessage = result.data.conversation.messages[0];
+        if (initialMessage && initialMessage.role === 'assistant') {
+          setTranscript(initialMessage.content);
+          if (!isRoleplay) {
+            setShowTranscript(true);
+          }
+          
+          // Play initial greeting audio if available
+          if (initialMessage.audioUrl) {
+            playAudio(initialMessage.audioUrl);
+          }
+          
+          // Update vocabulary words
+          if (initialMessage.vocabularyWords) {
+            setVocabCount(prev => prev + initialMessage.vocabularyWords.length);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to initialize conversation:', err);
+      
+      // Handle specific error cases
+      if (err.response?.status === 401) {
+        setError('Authentication required. Retrying...');
+        // Try to re-authenticate
+        try {
+          await authAPI.ensureAuthenticated();
+          // Retry initialization
+          setTimeout(() => initializeConversation(), 500);
+        } catch (authErr) {
+          Alert.alert(
+            'Authentication Required',
+            'Failed to authenticate. Please ensure the backend server is running and try again.'
+          );
+        }
+      } else if (err.code === 'ECONNREFUSED' || err.message?.includes('Network') || err.code === 'ERR_NETWORK') {
+        setError('Cannot connect to backend server.');
+        Alert.alert(
+          'Connection Error',
+          'Cannot connect to backend server. Please ensure the server is running on port 5000.'
+        );
+      } else {
+        setError('Failed to start conversation. Please try again.');
+        console.error('Conversation error details:', err);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Load cultural tips from backend
+  const loadCulturalTips = async () => {
+    try {
+      const result = await tipsAPI.getRandomTips(language?.id || 'yoruba', 10);
+      if (result.success && result.data.tips) {
+        setCulturalTips(result.data.tips);
+      }
+    } catch (err) {
+      // Silently fall back to mock data if backend unavailable
+      if (err.code === 'ECONNREFUSED' || err.code === 'ERR_NETWORK' || err.message?.includes('Network')) {
+        console.log('Backend unavailable - using mock cultural tips');
+      } else {
+        console.error('Failed to load cultural tips:', err);
+      }
+      // Keep mock data as fallback
+    }
+  };
+
+  // Load vocabulary stats from backend
+  const loadVocabularyStats = async () => {
+    try {
+      const result = await vocabularyAPI.getStats(language?.id || 'yoruba');
+      if (result.success && result.data.stats) {
+        const stats = result.data.stats[0];
+        if (stats) {
+          setVocabCount(stats.totalWords || 0);
+        }
+      }
+    } catch (err) {
+      // Silently keep default value if backend unavailable
+      if (err.code === 'ECONNREFUSED' || err.code === 'ERR_NETWORK' || err.message?.includes('Network')) {
+        console.log('Backend unavailable - using default vocabulary count');
+      } else {
+        console.error('Failed to load vocabulary stats:', err);
+      }
+      // Keep default value
+    }
+  };
+
+  // Play audio from URL
+  const playAudio = async (audioUrl) => {
+    try {
+      console.log('Playing audio from URL:', audioUrl);
+      
+      // Stop any currently playing audio
+      if (sound) {
+        try {
+          await sound.unloadAsync();
+        } catch (unloadErr) {
+          console.log('Error unloading previous sound:', unloadErr);
+        }
+      }
+
+      // Configure audio mode for playback
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+        playsInSilentModeIOS: true,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+
+      // Construct full URL using API base URL (without /api since audio is served from /uploads)
+      let fullUrl = audioUrl;
+      if (!audioUrl.startsWith('http')) {
+        // Use the same base URL as API config for consistency
+        fullUrl = `${API_BASE}${audioUrl.startsWith('/') ? '' : '/'}${audioUrl}`;
+      }
+      console.log('Loading audio from:', fullUrl);
+
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri: fullUrl },
+        { shouldPlay: true, volume: 1.0 }
+      );
+      
+      setSound(newSound);
+
+      // When audio finishes
+      newSound.setOnPlaybackStatusUpdate((status) => {
+        if (status.didJustFinish) {
+          console.log('Audio playback finished');
+          setConversationState(STATES.IDLE);
+          newSound.unloadAsync().catch(err => console.log('Error unloading sound:', err));
+          setSound(null);
+        }
+        if (status.error) {
+          console.error('Audio playback error:', status.error);
+          setConversationState(STATES.IDLE);
+        }
+      });
+    } catch (err) {
+      console.error('Failed to play audio:', err);
+      // Continue without audio
+      setConversationState(STATES.IDLE);
+    }
+  };
+
+  // Speak text using device TTS (fallback if backend TTS fails)
+  const speakText = async (text) => {
+    try {
+      console.log('Speaking text:', text);
+      
+      // Stop any currently playing audio
+      if (sound) {
+        try {
+          await sound.unloadAsync();
+        } catch (unloadErr) {
+          console.log('Error unloading previous sound:', unloadErr);
+        }
+      }
+
+      // Try to use backend TTS if available
+      if (conversationId) {
+        try {
+          const languageId = language?.id || 'yoruba';
+          const synthesizeResult = await audioAPI.synthesize(text, 'normal', undefined, languageId);
+          if (synthesizeResult.success && synthesizeResult.data.audioUrl) {
+            await playAudio(synthesizeResult.data.audioUrl);
+            return;
+          }
+        } catch (synthErr) {
+          console.log('Backend TTS unavailable, using device TTS:', synthErr);
+        }
+      }
+
+      // Device TTS fallback - Note: Device TTS does NOT support Yoruba/African languages well
+      // We'll still try it but warn the user that it won't sound good
+      try {
+        // Stop any existing speech
+        Speech.stop();
+        
+        // Map language IDs to TTS language codes
+        // Note: Most device TTS engines don't support African languages well
+        const languageMap = {
+          yoruba: 'yo-NG', // Nigerian Yoruba (may not be available)
+          swahili: 'sw-KE', // Kenyan Swahili (may not be available)
+          hausa: 'ha-NG', // Nigerian Hausa (may not be available)
+          zulu: 'zu-ZA', // South African Zulu (may not be available)
+          amharic: 'am-ET', // Ethiopian Amharic (may not be available)
+          igbo: 'ig-NG', // Nigerian Igbo (may not be available)
+          xhosa: 'xh-ZA', // South African Xhosa (may not be available)
+          akan: 'ak-GH', // Ghanaian Akan (may not be available)
+        };
+        
+        const languageCode = language?.id 
+          ? languageMap[language.id] || 'en-US' 
+          : 'en-US';
+        
+        console.warn('⚠️ Using device TTS (quality will be poor for African languages):', languageCode);
+        
+        // Try to speak with the language code, but it will likely fall back to English
+        // if the language isn't supported
+        Speech.speak(text, {
+          language: languageCode,
+          pitch: 1.0,
+          rate: 0.8,
+          onDone: () => {
+            console.log('Speech finished');
+            setConversationState(STATES.IDLE);
+            setTimeout(() => {
+              setShowTranscript(false);
+            }, 2000);
+          },
+          onStopped: () => {
+            console.log('Speech stopped');
+            setConversationState(STATES.IDLE);
+          },
+          onError: (error) => {
+            console.error('Speech error:', error);
+            // If TTS fails, just show the text
+            setConversationState(STATES.IDLE);
+            setTranscript(text);
+            if (!isRoleplay) {
+              setShowTranscript(true);
+            }
+            setTimeout(() => {
+              setShowTranscript(false);
+            }, 5000);
+          },
+        });
+        
+        // Estimate speech duration (roughly 150 words per minute)
+        const words = text.split(' ').length;
+        const estimatedDuration = Math.max(2000, (words / 150) * 60 * 1000);
+        
+        // Fallback timeout in case onDone doesn't fire
+        setTimeout(() => {
+          if (conversationState === STATES.AI_SPEAKING) {
+            setConversationState(STATES.IDLE);
+            setTimeout(() => {
+              setShowTranscript(false);
+            }, 2000);
+          }
+        }, estimatedDuration);
+        
+      } catch (speechErr) {
+        console.error('Failed to use device TTS:', speechErr);
+        console.warn('⚠️ Device TTS unavailable. Showing text only.');
+        
+        // Final fallback: just show transcript with simulated timing
+        setTranscript(text);
+        if (!isRoleplay) {
+          setShowTranscript(true);
+        }
+        const audioDuration = Math.max(2000, Math.min(5000, text.length * 100));
+        
+        setTimeout(() => {
+          setConversationState(STATES.IDLE);
+          setTimeout(() => {
+            setShowTranscript(false);
+          }, 3000);
+        }, audioDuration);
+      }
+      
+    } catch (err) {
+      console.error('Failed to speak text:', err);
+      setConversationState(STATES.IDLE);
+    }
+  };
 
   // Wave animation based on state
   useEffect(() => {
@@ -125,87 +514,508 @@ const ConversationScreen = ({ navigation, route }) => {
     pulseAnim.setValue(1);
   };
 
-  const handlePTTPress = () => {
-    console.log('PTT button pressed');
-    Animated.spring(buttonScale, {
-      toValue: 0.92,
-      useNativeDriver: true,
-    }).start();
-    setConversationState(STATES.USER_SPEAKING);
-    setTranscript('');
-    setShowTranscript(true);
+  // Start audio recording
+  const handlePTTPress = async () => {
+    try {
+      console.log('PTT button pressed - starting recording');
+      
+      // Don't start if already recording or processing
+      if (recording || conversationState === STATES.PROCESSING || conversationState === STATES.AI_SPEAKING) {
+        return;
+      }
 
-    // Simulate user speaking
-    setTimeout(() => {
-      setTranscript('Báwo ni?');
-    }, 500);
+      Animated.spring(buttonScale, {
+        toValue: 0.92,
+        useNativeDriver: true,
+      }).start();
+
+      // Clean up any existing recording first
+      if (recording) {
+        try {
+          const status = await recording.getStatusAsync();
+          if (status.isRecording) {
+            await recording.stopAndUnloadAsync();
+          }
+        } catch (cleanupErr) {
+          console.log('Cleaning up old recording:', cleanupErr);
+        }
+        setRecording(null);
+      }
+
+      // Request permissions
+      const { status } = await Audio.requestPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Microphone permission is required to record audio.');
+        return;
+      }
+
+      // Configure audio mode for recording
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+      });
+
+      // Start recording
+      const { recording: newRecording } = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY
+      );
+
+      setRecording(newRecording);
+      setConversationState(STATES.USER_SPEAKING);
+      setTranscript('');
+      if (!isRoleplay) {
+        setShowTranscript(true);
+      }
+    } catch (err) {
+      console.error('Failed to start recording:', err);
+      
+      // Clean up on error
+      if (recording) {
+        try {
+          await recording.stopAndUnloadAsync();
+        } catch (cleanupErr) {
+          // Ignore cleanup errors
+        }
+        setRecording(null);
+      }
+      
+      if (err.message?.includes('Only one Recording')) {
+        // Try to recover by cleaning up and retrying
+        try {
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+          });
+          setRecording(null);
+          // Don't show alert for this, just log
+          console.log('Cleaned up recording conflict');
+        } catch (recoverErr) {
+          console.error('Failed to recover from recording error:', recoverErr);
+        }
+      } else {
+        Alert.alert('Error', 'Failed to start recording. Please try again.');
+      }
+    }
   };
 
-  const handlePTTRelease = () => {
-    console.log('PTT button released');
-    Animated.spring(buttonScale, {
-      toValue: 1,
-      useNativeDriver: true,
-    }).start();
+  // Stop recording, transcribe, and send to AI
+  const handlePTTRelease = async () => {
+    try {
+      console.log('PTT button released - processing audio');
+      Animated.spring(buttonScale, {
+        toValue: 1,
+        useNativeDriver: true,
+      }).start();
 
-    // Transition through states
-    setConversationState(STATES.PROCESSING);
-    
-    setTimeout(() => {
-      setConversationState(STATES.AI_SPEAKING);
-      setTranscript('Mo wà dáadáa, ẹ ṣé!');
-      setVocabCount((prev) => prev + 1);
-
-      // After AI finishes
-      setTimeout(() => {
+      if (!recording) {
         setConversationState(STATES.IDLE);
-        // Fade out transcript after delay
-        setTimeout(() => {
-          Animated.timing(transcriptOpacity, {
-            toValue: 0,
-            duration: 500,
-            useNativeDriver: true,
-          }).start(() => setShowTranscript(false));
-        }, 3000);
-      }, 3000);
-    }, 1500);
+        return;
+      }
+
+      // Get URI before stopping
+      const uri = recording.getURI();
+      
+      // Stop recording
+      try {
+        const status = await recording.getStatusAsync();
+        if (status.isRecording) {
+          await recording.stopAndUnloadAsync();
+        }
+      } catch (stopErr) {
+        console.error('Error stopping recording:', stopErr);
+      }
+      
+      // Clean up recording state immediately
+      setRecording(null);
+      
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: false,
+      });
+
+      setConversationState(STATES.PROCESSING);
+
+      let transcribedText = null;
+      let currentConvId = conversationId;
+
+      // Step 1: Ensure authenticated
+      try {
+        await authAPI.ensureAuthenticated();
+      } catch (authErr) {
+        console.error('Authentication error:', authErr);
+        setConversationState(STATES.IDLE);
+        Alert.alert(
+          'Authentication Error',
+          'Failed to authenticate. Please ensure the backend server is running.'
+        );
+        return;
+      }
+
+      // Step 2: Transcribe audio
+      try {
+        console.log('Calling transcription API...');
+        console.log('Audio URI:', uri);
+        
+        // Determine file type based on platform
+        const fileType = Platform.OS === 'web' ? 'audio/webm' : 'audio/m4a';
+        const fileName = Platform.OS === 'web' ? 'recording.webm' : 'recording.m4a';
+        
+        const transcribeResult = await audioAPI.transcribe(
+          {
+            uri,
+            type: fileType,
+            name: fileName,
+          },
+          language?.id || 'yoruba'
+        );
+
+        if (transcribeResult.success && transcribeResult.data.text) {
+          transcribedText = transcribeResult.data.text;
+          setTranscript(transcribedText);
+          console.log('Transcription successful:', transcribedText);
+        } else {
+          throw new Error('Failed to transcribe audio');
+        }
+      } catch (transcribeErr) {
+        console.error('Transcription API error:', transcribeErr);
+        setConversationState(STATES.IDLE);
+        
+        if (transcribeErr.response?.status === 401) {
+          // Try to re-authenticate
+          try {
+            await authAPI.ensureAuthenticated();
+            Alert.alert('Authentication Retry', 'Please try recording again.');
+          } catch (authRetryErr) {
+            Alert.alert(
+              'Authentication Required',
+              'Failed to authenticate. Please ensure the backend server is running.'
+            );
+          }
+        } else {
+          Alert.alert('Transcription Error', transcribeErr.response?.data?.message || 'Failed to transcribe audio. Please try again.');
+        }
+        return;
+      }
+
+      // Step 3: If no conversationId, create a new conversation
+      if (!currentConvId) {
+        try {
+          console.log('Creating new conversation...');
+          const initResult = await conversationAPI.startConversation(
+            language?.id || 'yoruba',
+            personality?.id || 'friendly'
+          );
+
+          if (initResult.success && initResult.data.conversation) {
+            currentConvId = initResult.data.conversation.id;
+            setConversationId(currentConvId);
+            console.log('Conversation created:', currentConvId);
+          } else {
+            throw new Error('Failed to create conversation');
+          }
+        } catch (initErr) {
+          console.error('Conversation initialization error:', initErr);
+          setConversationState(STATES.IDLE);
+          
+          if (initErr.response?.status === 401) {
+            try {
+              await authAPI.ensureAuthenticated();
+              Alert.alert('Authentication Retry', 'Please try recording again.');
+            } catch (authRetryErr) {
+              Alert.alert(
+                'Authentication Required',
+                'Failed to authenticate. Please ensure the backend server is running.'
+              );
+            }
+          } else {
+            Alert.alert('Error', initErr.response?.data?.message || 'Failed to create conversation. Please try again.');
+          }
+          return;
+        }
+      }
+
+      // Step 3: Send message to AI
+      if (currentConvId && transcribedText) {
+        try {
+          console.log('Sending message to AI...');
+          const messageResult = await conversationAPI.sendMessage(
+            currentConvId,
+            transcribedText
+          );
+
+          if (messageResult.success && messageResult.data.aiMessage) {
+            const aiMessage = messageResult.data.aiMessage;
+            console.log('AI response received:', aiMessage.content);
+            
+            // Show AI response
+            setConversationState(STATES.AI_SPEAKING);
+            setTranscript(aiMessage.content);
+
+            // Update vocabulary count
+            if (aiMessage.vocabularyWords && aiMessage.vocabularyWords.length > 0) {
+              setVocabCount(prev => prev + aiMessage.vocabularyWords.length);
+            }
+
+            // Step 4: Play AI audio response
+            if (aiMessage.audioUrl) {
+              console.log('Playing audio from URL:', aiMessage.audioUrl);
+              await playAudio(aiMessage.audioUrl);
+            } else {
+              // Try to synthesize audio if no URL provided
+              console.log('No audio URL, synthesizing...');
+              try {
+                const languageId = language?.id || 'yoruba';
+                const synthesizeResult = await audioAPI.synthesize(
+                  aiMessage.content,
+                  'normal',
+                  undefined,
+                  languageId
+                );
+                if (synthesizeResult.success && synthesizeResult.data.audioUrl) {
+                  console.log('Audio synthesized:', synthesizeResult.data.audioUrl);
+                  await playAudio(synthesizeResult.data.audioUrl);
+                } else {
+                  console.log('Synthesis failed, using device TTS');
+                  await speakText(aiMessage.content);
+                }
+              } catch (synthErr) {
+                console.error('Synthesis API error:', synthErr);
+                // Fallback to device TTS
+                await speakText(aiMessage.content);
+              }
+            }
+          } else {
+            throw new Error('Failed to get AI response');
+          }
+        } catch (messageErr) {
+          console.error('Message API error:', messageErr);
+          setConversationState(STATES.IDLE);
+          
+          // Handle specific errors
+          if (messageErr.response?.status === 401) {
+            // Try to re-authenticate
+            try {
+              await authAPI.ensureAuthenticated();
+              Alert.alert('Authentication Retry', 'Please try again.');
+            } catch (authRetryErr) {
+              Alert.alert(
+                'Authentication Required',
+                'Failed to authenticate. Please ensure the backend server is running.'
+              );
+            }
+          } else if (messageErr.response?.status === 404) {
+            Alert.alert('Error', 'Conversation not found. Please start a new conversation.');
+          } else {
+            Alert.alert('Error', messageErr.response?.data?.message || 'Failed to get AI response. Please try again.');
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Failed to process recording:', err);
+      setConversationState(STATES.IDLE);
+      setShowTranscript(false);
+    }
   };
 
-  const handleHelpMeRespond = () => {
-    console.log('Help Me Respond pressed');
-    setShowHelpModal(true);
+  // Get AI suggestions for responses
+  const handleHelpMeRespond = async () => {
+    // Ensure authenticated first
+    try {
+      await authAPI.ensureAuthenticated();
+    } catch (authErr) {
+      console.error('Authentication error in help me respond:', authErr);
+      Alert.alert(
+        'Authentication Error',
+        'Failed to authenticate. Please ensure the backend server is running.'
+      );
+      return;
+    }
+
+    let currentConvId = conversationId;
+
+    // Step 1: If no conversationId, create one
+    if (!currentConvId) {
+      try {
+        console.log('Creating conversation for suggestions...');
+        setLoading(true);
+        const initResult = await conversationAPI.startConversation(
+          language?.id || 'yoruba',
+          personality?.id || 'friendly'
+        );
+
+        if (initResult.success && initResult.data.conversation) {
+          currentConvId = initResult.data.conversation.id;
+          setConversationId(currentConvId);
+          console.log('Conversation created for suggestions:', currentConvId);
+        } else {
+          throw new Error('Failed to create conversation');
+        }
+      } catch (initErr) {
+        console.error('Failed to create conversation for suggestions:', initErr);
+        setLoading(false);
+        
+        if (initErr.response?.status === 401) {
+          try {
+            await authAPI.ensureAuthenticated();
+            Alert.alert('Authentication Retry', 'Please try again.');
+          } catch (authRetryErr) {
+            Alert.alert(
+              'Authentication Required',
+              'Failed to authenticate. Please ensure the backend server is running.'
+            );
+          }
+        } else {
+          Alert.alert('Error', initErr.response?.data?.message || 'Failed to create conversation. Please try again.');
+        }
+        return;
+      }
+    }
+
+    // Step 2: Get suggestions from API
+    try {
+      console.log('Calling suggestions API...');
+      setLoading(true);
+      const result = await conversationAPI.getSuggestions(currentConvId);
+      
+      if (result.success && result.data.suggestions) {
+        console.log('Suggestions received:', result.data.suggestions.length);
+        setSuggestedResponses(result.data.suggestions);
+        setShowHelpModal(true);
+      } else {
+        throw new Error('No suggestions in response');
+      }
+    } catch (err) {
+      console.error('Suggestions API error:', err);
+      
+      if (err.response?.status === 401) {
+        try {
+          await authAPI.ensureAuthenticated();
+          Alert.alert('Authentication Retry', 'Please try again.');
+        } catch (authRetryErr) {
+          Alert.alert(
+            'Authentication Required',
+            'Failed to authenticate. Please ensure the backend server is running.'
+          );
+        }
+      } else {
+        Alert.alert('Error', err.response?.data?.message || 'Failed to get suggestions. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const handleSelectResponse = (response) => {
-    console.log('Selected response:', response);
+  // Use selected suggested response
+  const handleSelectResponse = async (response) => {
     setShowHelpModal(false);
-    setTranscript(response.original);
-    setShowTranscript(true);
+    
+    let currentConvId = conversationId;
+
+    // Step 1: If no conversationId, create one
+    if (!currentConvId) {
+      try {
+        console.log('Creating conversation for suggested response...');
+        const initResult = await conversationAPI.startConversation(
+          language?.id || 'yoruba',
+          personality?.id || 'friendly'
+        );
+
+        if (initResult.success && initResult.data.conversation) {
+          currentConvId = initResult.data.conversation.id;
+          setConversationId(currentConvId);
+          console.log('Conversation created:', currentConvId);
+        } else {
+          throw new Error('Failed to create conversation');
+        }
+      } catch (initErr) {
+        console.error('Failed to create conversation:', initErr);
+        Alert.alert('Error', initErr.response?.data?.message || 'Failed to create conversation. Please try again.');
+        return;
+      }
+    }
+
+    setConversationState(STATES.PROCESSING);
+    setTranscript(response.original || response.text);
+    if (!isRoleplay) {
+      setShowTranscript(true);
+    }
+
+    // Step 2: Send message to AI
+    try {
+      console.log('Sending suggested response to AI...');
+      const result = await conversationAPI.sendMessage(currentConvId, response.original || response.text);
+      
+      if (result.success && result.data.aiMessage) {
+        const aiMessage = result.data.aiMessage;
+        console.log('AI response received:', aiMessage.content);
+        
+        setConversationState(STATES.AI_SPEAKING);
+        setTranscript(aiMessage.content);
+
+        // Update vocabulary
+        if (aiMessage.vocabularyWords) {
+          setVocabCount(prev => prev + aiMessage.vocabularyWords.length);
+        }
+
+        // Step 3: Play AI audio
+        if (aiMessage.audioUrl) {
+          console.log('Playing audio from URL:', aiMessage.audioUrl);
+          await playAudio(aiMessage.audioUrl);
+        } else {
+          // Try to synthesize audio
+          try {
+            console.log('Synthesizing audio...');
+            const languageId = language?.id || 'yoruba';
+            const synthesizeResult = await audioAPI.synthesize(aiMessage.content, 'normal', undefined, languageId);
+            if (synthesizeResult.success && synthesizeResult.data.audioUrl) {
+              await playAudio(synthesizeResult.data.audioUrl);
+            } else {
+              await speakText(aiMessage.content);
+            }
+          } catch (synthErr) {
+            console.error('Synthesis error:', synthErr);
+            await speakText(aiMessage.content);
+          }
+        }
+      } else {
+        throw new Error('Failed to get AI response');
+      }
+    } catch (err) {
+      console.error('Failed to send suggested response:', err);
+      setConversationState(STATES.IDLE);
+      
+      // Handle specific errors
+      if (err.response?.status === 401) {
+        Alert.alert('Authentication Required', 'Please login to use AI features.');
+      } else if (err.response?.status === 404) {
+        Alert.alert('Error', 'Conversation not found. Please start a new conversation.');
+      } else {
+        Alert.alert('Error', err.response?.data?.message || 'Failed to send message. Please try again.');
+      }
+    }
   };
 
   const getStateConfig = () => {
     switch (conversationState) {
       case STATES.USER_SPEAKING:
         return {
-          color: COLORS.userSpeaking,
+          color: COLORS.userSpeaking || COLORS.primary,
           text: "You're speaking...",
           icon: 'mic',
         };
       case STATES.PROCESSING:
         return {
-          color: COLORS.warning,
+          color: COLORS.warning || COLORS.accent,
           text: 'Thinking...',
           icon: 'sync',
         };
       case STATES.AI_SPEAKING:
         return {
-          color: COLORS.aiSpeaking,
+          color: COLORS.aiSpeaking || COLORS.success,
           text: 'AI is responding...',
           icon: 'volume-high',
         };
       default:
         return {
-          color: COLORS.idle,
+          color: COLORS.idle || COLORS.textMuted,
           text: 'Tap to speak',
           icon: 'mic-outline',
         };
@@ -260,6 +1070,22 @@ const ConversationScreen = ({ navigation, route }) => {
     );
   };
 
+  // Show loading state while initializing
+  if (loading && !conversationId && !error) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <LinearGradient
+          colors={[COLORS.background, COLORS.backgroundLight, COLORS.surface]}
+          style={StyleSheet.absoluteFill}
+        />
+        <ActivityIndicator size="large" color={COLORS.primary} />
+        <Text style={{ color: COLORS.text, marginTop: SPACING.md }}>
+          Starting conversation...
+        </Text>
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       <LinearGradient
@@ -307,20 +1133,26 @@ const ConversationScreen = ({ navigation, route }) => {
               contentContainerStyle={styles.tipContent}
             >
               <Text style={styles.tipText}>
-                {CULTURAL_TIPS_YORUBA[currentTipIndex].tip}
+                {culturalTips.length > 0 ? (culturalTips[currentTipIndex]?.tip || 'No tip available') : 'No cultural tips available. Start a conversation to see tips!'}
               </Text>
             </ScrollView>
-            <View style={styles.tipIndicator}>
-              {CULTURAL_TIPS_YORUBA.slice(0, 5).map((_, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.tipDot,
-                    idx === currentTipIndex % 5 && styles.tipDotActive,
-                  ]}
-                />
-              ))}
-            </View>
+        {!isRoleplay && culturalTips.length > 0 && (
+              <View style={styles.tipIndicator}>
+                {culturalTips.slice(0, 5).map((_, idx) => {
+                  const isActive = idx === currentTipIndex % 5;
+                  const dotStyles = [styles.tipDot];
+                  if (isActive) {
+                    dotStyles.push(styles.tipDotActive);
+                  }
+                  return (
+                    <View
+                      key={idx}
+                      style={dotStyles}
+                    />
+                  );
+                })}
+              </View>
+            )}
           </LinearGradient>
         </Animated.View>
       </View>
@@ -355,7 +1187,7 @@ const ConversationScreen = ({ navigation, route }) => {
         </Text>
 
         {/* Transcript */}
-        {showTranscript && transcript && (
+        {!isRoleplay && showTranscript && transcript && (
           <Animated.View style={[styles.transcriptContainer]}>
             <Text style={styles.transcriptLabel}>
               {conversationState === STATES.AI_SPEAKING ? 'AI:' : 'You:'}
@@ -366,9 +1198,56 @@ const ConversationScreen = ({ navigation, route }) => {
       </View>
 
       {/* Bottom Section - PTT Button */}
+      {/* Countdown timer for roleplay */}
+      {isRoleplay && timeLeft !== null && (
+        <View style={styles.timerChip}>
+          <Ionicons name="time" size={16} color={COLORS.text} />
+          <Text style={styles.timerText}>
+            {Math.floor(timeLeft / 60)
+              .toString()
+              .padStart(2, '0')}
+            :
+            {(timeLeft % 60).toString().padStart(2, '0')} left
+          </Text>
+        </View>
+      )}
+
       <View style={styles.bottomSection}>
-        {/* Help Me Respond Button */}
-        {conversationState === STATES.IDLE && (
+        {/* Roleplay actions: help & word bank */}
+        {isRoleplay && !isSessionOver && conversationState === STATES.IDLE && (
+          <View style={styles.roleplayActionsRow}>
+            <TouchableOpacity
+              style={styles.roleplayAction}
+              onPress={handleHelpMeRespond}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="bulb-outline" size={18} color={COLORS.accent} />
+              <Text style={styles.roleplayActionText}>I'm stuck, help me respond</Text>
+            </TouchableOpacity>
+            {/* Placeholder word bank trigger; actual words surface in modal/assistant */}
+            <View style={[styles.roleplayAction, styles.roleplayWordBank]}>
+              <Ionicons name="book-outline" size={18} color={COLORS.primary} />
+              <Text style={styles.roleplayActionText}>Word bank</Text>
+            </View>
+          </View>
+        )}
+
+        {/* End conversation button for roleplay */}
+        {isRoleplay && !isSessionOver && (
+          <TouchableOpacity
+            style={styles.endSessionButton}
+            onPress={() => finishRoleplaySession(false)}
+            activeOpacity={0.7}
+            disabled={ending}
+          >
+            <Text style={styles.endSessionText}>
+              {ending ? 'Ending…' : 'End conversation'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+        {/* Help Me Respond Button (non-roleplay) */}
+        {!isRoleplay && conversationState === STATES.IDLE && (
           <TouchableOpacity
             style={styles.helpButton}
             onPress={handleHelpMeRespond}
@@ -389,7 +1268,11 @@ const ConversationScreen = ({ navigation, route }) => {
             ]}
             onPressIn={handlePTTPress}
             onPressOut={handlePTTRelease}
-            disabled={conversationState === STATES.PROCESSING || conversationState === STATES.AI_SPEAKING}
+            disabled={
+              conversationState === STATES.PROCESSING ||
+              conversationState === STATES.AI_SPEAKING ||
+              isSessionOver
+            }
             activeOpacity={1}
           >
             <LinearGradient
@@ -403,16 +1286,18 @@ const ConversationScreen = ({ navigation, route }) => {
               style={styles.pttGradient}
             >
               {conversationState === STATES.PROCESSING ? (
-                <Ionicons name="sync" size={40} color={COLORS.text} />
-              ) : (
-                <Ionicons name="mic" size={40} color={COLORS.text} />
-              )}
+              <ActivityIndicator size="large" color={COLORS.text} />
+            ) : (
+              <Ionicons name="mic" size={40} color={COLORS.text} />
+            )}
             </LinearGradient>
           </TouchableOpacity>
         </Animated.View>
 
         <Text style={styles.pttLabel}>
-          {conversationState === STATES.USER_SPEAKING
+          {isSessionOver
+            ? 'Session complete'
+            : conversationState === STATES.USER_SPEAKING
             ? 'Listening...'
             : conversationState === STATES.PROCESSING
             ? 'Processing...'
@@ -427,7 +1312,8 @@ const ConversationScreen = ({ navigation, route }) => {
         visible={showHelpModal}
         onClose={() => setShowHelpModal(false)}
         onSelectResponse={handleSelectResponse}
-        responses={SUGGESTED_RESPONSES}
+        responses={suggestedResponses}
+        language={language}
       />
     </View>
   );
@@ -572,6 +1458,64 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingBottom: SPACING.xxl,
     paddingHorizontal: SPACING.lg,
+  },
+  timerChip: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: SPACING.sm,
+    backgroundColor: COLORS.surface,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: 6,
+    borderRadius: BORDER_RADIUS.round,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  timerText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
+    fontWeight: '600',
+  },
+  roleplayActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: SPACING.lg,
+    gap: SPACING.sm,
+  },
+  roleplayAction: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.sm,
+    borderRadius: BORDER_RADIUS.lg,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    gap: SPACING.xs,
+  },
+  roleplayWordBank: {
+    backgroundColor: COLORS.surfaceLight,
+  },
+  roleplayActionText: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.textSecondary,
+    flexShrink: 1,
+  },
+  endSessionButton: {
+    marginBottom: SPACING.lg,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: BORDER_RADIUS.round,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  endSessionText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textMuted,
+    fontWeight: '600',
   },
   helpButton: {
     flexDirection: 'row',

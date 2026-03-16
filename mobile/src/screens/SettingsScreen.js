@@ -6,16 +6,21 @@ import {
   TouchableOpacity,
   ScrollView,
   Switch,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { authAPI } from '../services';
+import { useAuth } from '../context/AuthContext';
 
 const SettingsScreen = ({ navigation }) => {
   const [voiceSpeed, setVoiceSpeed] = useState(1); // 0.5, 1, 1.5
   const [darkMode, setDarkMode] = useState(true);
   const [selectedLanguage] = useState({ name: 'Yoruba', flag: '🇳🇬' });
   const [selectedPersonality] = useState({ name: 'Friendly & Casual', emoji: '😊' });
+
+  const { setIsAuthenticated } = useAuth();
 
   const handleVoiceSpeedChange = (speed) => {
     console.log('Voice speed changed to:', speed);
@@ -27,10 +32,42 @@ const SettingsScreen = ({ navigation }) => {
     setDarkMode(value);
   };
 
-  const handleSignOut = () => {
-    console.log('Sign out pressed');
-    // Sign out logic would go here
+  const handleSignOut = async () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'Sign Out',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await authAPI.logout();
+              // update global auth state so App can react
+              try {
+                setIsAuthenticated(false);
+              } catch (e) {
+                // ignore if context not provided
+              }
+              // Navigate to login screen
+              navigation.reset({
+                index: 0,
+                routes: [{ name: 'Login' }],
+              });
+            } catch (error) {
+              console.error('Logout error:', error);
+              Alert.alert('Error', 'Failed to sign out. Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
+
 
   const SettingItem = ({ icon, title, value, onPress, showChevron = true, rightElement }) => (
     <TouchableOpacity

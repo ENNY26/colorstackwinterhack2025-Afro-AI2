@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -8,16 +8,23 @@ import {
   Animated,
   Dimensions,
   ScrollView,
+  ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import { Audio } from 'expo-av';
+import * as Speech from 'expo-speech';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { audioAPI, API_BASE } from '../services';
 
 const { height } = Dimensions.get('window');
 
-const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses }) => {
+const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses, language }) => {
   const slideAnim = useRef(new Animated.Value(height)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
+  const [playingIndex, setPlayingIndex] = useState(null);
+  const [sound, setSound] = useState(null);
 
   useEffect(() => {
     if (visible) {
@@ -50,31 +57,147 @@ const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses }) =
     }
   }, [visible]);
 
-  const handlePlayAudio = (response) => {
-    console.log('Playing audio for:', response.original);
-    // Audio playback would go here
+  // Cleanup audio on unmount or when modal closes
+  useEffect(() => {
+    if (!visible) {
+      // Stop any playing audio when modal closes
+      Speech.stop();
+      if (sound) {
+        sound.unloadAsync().catch(err => console.log('Error unloading sound:', err));
+        setSound(null);
+      }
+      setPlayingIndex(null);
+    }
+    
+    return () => {
+      // Cleanup on unmount
+      Speech.stop();
+      if (sound) {
+        sound.unloadAsync().catch(err => console.log('Error unloading sound:', err));
+      }
+    };
+  }, [visible, sound]);
+
+  const handlePlayAudio = async (response, index) => {
+    try {
+      console.log('Playing audio for:', response.original);
+      setPlayingIndex(index);
+
+      // Stop any currently playing TTS
+      Speech.stop();
+
+      // Stop any currently playing audio
+      if (sound) {
+        try {
+          await sound.stopAsync();
+          await sound.unloadAsync();
+        } catch (unloadErr) {
+          console.log('Error unloading previous sound:', unloadErr);
+        }
+        setSound(null);
+      }
+
+      // Try to synthesize audio from backend first (ElevenLabs)
+      try {
+        const languageId = language?.id || 'yoruba';
+        const synthesizeResult = await audioAPI.synthesize(response.original, 'normal', undefined, languageId);
+        
+        if (synthesizeResult.success && synthesizeResult.data.audioUrl) {
+          const audioUrl = synthesizeResult.data.audioUrl;
+          const fullUrl = audioUrl.startsWith('http') 
+            ? audioUrl 
+            : `${API_BASE}${audioUrl.startsWith('/') ? '' : '/'}${audioUrl}`;
+          
+          console.log('✅ Playing synthesized audio from ElevenLabs:', fullUrl);
+
+          // Configure audio mode
+          await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            shouldDuckAndroid: true,
+            playThroughEarpieceAndroid: false,
+          });
+
+          // Load and play audio
+          const { sound: newSound } = await Audio.Sound.createAsync(
+            { uri: fullUrl },
+            { shouldPlay: true, volume: 1.0 }
+          );
+
+          setSound(newSound);
+
+          // When audio finishes
+          newSound.setOnPlaybackStatusUpdate((status) => {
+            if (status.didJustFinish) {
+              console.log('Audio playback finished');
+              setPlayingIndex(null);
+              newSound.unloadAsync().catch(err => console.log('Error unloading sound:', err));
+              setSound(null);
+            }
+            if (status.error) {
+              console.error('Audio playback error:', status.error);
+              setPlayingIndex(null);
+              setSound(null);
+            }
+          });
+          return;
+        }
+      } catch (synthErr) {
+        console.error('❌ Backend synthesis failed:', synthErr.response?.data || synthErr.message);
+        
+        // Don't use device TTS for Yoruba/African languages - it sounds terrible
+        // Instead, show a helpful message
+        setPlayingIndex(null);
+        Alert.alert(
+          'Premium Audio Unavailable',
+          'ElevenLabs TTS is not available. Device TTS does not support African language pronunciation well.\n\n' +
+          'To enable premium audio:\n' +
+          '1. Get an ElevenLabs API key from https://elevenlabs.io/\n' +
+          '2. Add it to server/.env as ELEVENLABS_API_KEY\n' +
+          '3. Add ELEVENLABS_VOICE_ID to your .env file',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+    } catch (err) {
+      console.error('Failed to play audio:', err);
+      setPlayingIndex(null);
+    }
   };
 
-  const ResponseCard = ({ response, index }) => (
-    <TouchableOpacity
-      style={styles.responseCard}
-      onPress={() => onSelectResponse(response)}
-      activeOpacity={0.7}
-    >
-      <View style={styles.cardContent}>
-        <View style={styles.cardTextContainer}>
-          <Text style={styles.originalText}>{response.original}</Text>
-          <Text style={styles.translationText}>{response.translation}</Text>
+  const ResponseCard = ({ response, index }) => {
+    const isPlaying = playingIndex === index;
+    
+    return (
+      <TouchableOpacity
+        style={styles.responseCard}
+        onPress={() => onSelectResponse(response)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.cardContent}>
+          <View style={styles.cardTextContainer}>
+            <Text style={styles.originalText}>{response.original}</Text>
+            <Text style={styles.translationText}>{response.translation}</Text>
+          </View>
+          <TouchableOpacity
+            style={[styles.playButton, isPlaying && styles.playButtonActive]}
+            onPress={(e) => {
+              e.stopPropagation(); // Prevent card selection when pressing play button
+              handlePlayAudio(response, index);
+            }}
+            activeOpacity={0.7}
+            disabled={isPlaying}
+          >
+            {isPlaying ? (
+              <ActivityIndicator size="small" color={COLORS.primary} />
+            ) : (
+              <Ionicons name="volume-medium" size={24} color={COLORS.primary} />
+            )}
+          </TouchableOpacity>
         </View>
-        <TouchableOpacity
-          style={styles.playButton}
-          onPress={() => handlePlayAudio(response)}
-        >
-          <Ionicons name="volume-medium" size={24} color={COLORS.primary} />
-        </TouchableOpacity>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   return (
     <Modal
@@ -92,7 +215,7 @@ const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses }) =
           ]}
         >
           <TouchableOpacity
-            style={StyleSheet.absoluteFill}
+            style={[StyleSheet.absoluteFill, { pointerEvents: 'auto' }]}
             onPress={onClose}
             activeOpacity={1}
           />
@@ -134,9 +257,19 @@ const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses }) =
               contentContainerStyle={styles.scrollContent}
               showsVerticalScrollIndicator={false}
             >
-              {responses.map((response, index) => (
-                <ResponseCard key={response.id} response={response} index={index} />
-              ))}
+              {responses && responses.length > 0 ? (
+                responses.map((response, index) => (
+                  <ResponseCard 
+                    key={response.id || `response-${index}`} 
+                    response={response} 
+                    index={index} 
+                  />
+                ))
+              ) : (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyText}>No suggestions available</Text>
+                </View>
+              )}
             </ScrollView>
 
             {/* Use Button */}
@@ -251,6 +384,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginLeft: SPACING.md,
   },
+  playButtonActive: {
+    backgroundColor: COLORS.primary + '40',
+  },
   footer: {
     paddingHorizontal: SPACING.lg,
     paddingTop: SPACING.md,
@@ -259,6 +395,15 @@ const styles = StyleSheet.create({
   },
   footerHint: {
     fontSize: FONT_SIZES.sm,
+    color: COLORS.textMuted,
+    textAlign: 'center',
+  },
+  emptyContainer: {
+    padding: SPACING.xl,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: FONT_SIZES.md,
     color: COLORS.textMuted,
     textAlign: 'center',
   },

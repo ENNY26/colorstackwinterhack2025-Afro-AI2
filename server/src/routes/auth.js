@@ -1,10 +1,23 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
+const mongoose = require('mongoose');
 const User = require('../models/User');
 const { auth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 const router = express.Router();
+
+// Middleware to check database connection
+const checkDatabase = (req, res, next) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      success: false,
+      message: 'Database not connected. Please check your MongoDB connection.',
+      error: 'DATABASE_NOT_CONNECTED',
+    });
+  }
+  next();
+};
 
 /**
  * @route   POST /api/auth/register
@@ -12,6 +25,7 @@ const router = express.Router();
  * @access  Public
  */
 router.post('/register', [
+  checkDatabase,
   body('email').isEmail().withMessage('Please provide a valid email'),
   body('password').isLength({ min: 6 }).withMessage('Password must be at least 6 characters'),
   body('name').trim().notEmpty().withMessage('Name is required'),
@@ -67,6 +81,7 @@ router.post('/register', [
  * @access  Public
  */
 router.post('/login', [
+  checkDatabase,
   body('email').isEmail().withMessage('Please provide a valid email'),
   body('password').notEmpty().withMessage('Password is required'),
 ], asyncHandler(async (req, res) => {

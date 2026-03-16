@@ -1,17 +1,45 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
-import { CONVERSATION_HISTORY } from '../constants/mockData';
+import { conversationAPI } from '../services';
 
 const HistoryScreen = ({ navigation }) => {
+  const [conversations, setConversations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    loadConversations();
+  }, []);
+
+  const loadConversations = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const result = await conversationAPI.getConversations({ limit: 50 });
+      
+      if (result.success && result.data.conversations) {
+        setConversations(result.data.conversations);
+      } else {
+        setError('Failed to load conversations');
+      }
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+      setError('Failed to load conversations. Please try again.');
+      setConversations([]);
+    } finally {
+      setLoading(false);
+    }
+  };
   const formatDate = (date) => {
     const now = new Date();
     const d = new Date(date);
@@ -39,52 +67,73 @@ const HistoryScreen = ({ navigation }) => {
   const handleResumeConversation = (conversation) => {
     console.log('Resume conversation:', conversation.id);
     navigation.navigate('Conversation', {
-      language: { id: conversation.language, name: conversation.languageName, flag: conversation.flag },
+      language: { 
+        id: conversation.language, 
+        name: conversation.languageName || conversation.language, 
+        flag: conversation.flag || '🇳🇬' 
+      },
       conversationId: conversation.id,
     });
   };
 
-  const renderConversationCard = ({ item }) => (
-    <TouchableOpacity
-      style={styles.conversationCard}
-      onPress={() => handleResumeConversation(item)}
-      activeOpacity={0.7}
-    >
-      <View style={styles.cardHeader}>
-        <View style={styles.languageInfo}>
-          <Text style={styles.flag}>{item.flag}</Text>
-          <View>
-            <Text style={styles.languageName}>{item.languageName}</Text>
-            <Text style={styles.dateTime}>
-              {formatDate(item.date)} at {formatTime(item.date)}
-            </Text>
+  const formatDuration = (minutes) => {
+    if (!minutes) return '0 min';
+    if (minutes < 60) return `${Math.round(minutes)} min`;
+    const hours = Math.floor(minutes / 60);
+    const mins = Math.round(minutes % 60);
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  };
+
+  const renderConversationCard = ({ item }) => {
+    const conversationDate = item.createdAt || item.updatedAt || item.date || new Date();
+    const languageName = item.languageName || item.language || 'Unknown';
+    const flag = item.flag || '🇳🇬';
+    const preview = item.lastMessage?.content || item.preview || 'No messages yet';
+    const duration = item.duration ? formatDuration(item.duration) : formatDuration((new Date() - new Date(conversationDate)) / 60000);
+    const turns = item.messageCount || item.turns || 0;
+
+    return (
+      <TouchableOpacity
+        style={styles.conversationCard}
+        onPress={() => handleResumeConversation(item)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.cardHeader}>
+          <View style={styles.languageInfo}>
+            <Text style={styles.flag}>{flag}</Text>
+            <View>
+              <Text style={styles.languageName}>{languageName}</Text>
+              <Text style={styles.dateTime}>
+                {formatDate(conversationDate)} at {formatTime(conversationDate)}
+              </Text>
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.resumeButton}
+            onPress={() => handleResumeConversation(item)}
+          >
+            <Text style={styles.resumeText}>Resume</Text>
+            <Ionicons name="play" size={14} color={COLORS.primary} />
+          </TouchableOpacity>
+        </View>
+
+        <Text style={styles.previewText} numberOfLines={2}>
+          {preview}
+        </Text>
+
+        <View style={styles.cardFooter}>
+          <View style={styles.stat}>
+            <Ionicons name="time-outline" size={14} color={COLORS.textMuted} />
+            <Text style={styles.statText}>{duration}</Text>
+          </View>
+          <View style={styles.stat}>
+            <Ionicons name="chatbubbles-outline" size={14} color={COLORS.textMuted} />
+            <Text style={styles.statText}>{turns} turns</Text>
           </View>
         </View>
-        <TouchableOpacity
-          style={styles.resumeButton}
-          onPress={() => handleResumeConversation(item)}
-        >
-          <Text style={styles.resumeText}>Resume</Text>
-          <Ionicons name="play" size={14} color={COLORS.primary} />
-        </TouchableOpacity>
-      </View>
-
-      <Text style={styles.previewText} numberOfLines={2}>
-        {item.preview}
-      </Text>
-
-      <View style={styles.cardFooter}>
-        <View style={styles.stat}>
-          <Ionicons name="time-outline" size={14} color={COLORS.textMuted} />
-          <Text style={styles.statText}>{item.duration}</Text>
-        </View>
-        <View style={styles.stat}>
-          <Ionicons name="chatbubbles-outline" size={14} color={COLORS.textMuted} />
-          <Text style={styles.statText}>{item.turns} turns</Text>
-        </View>
-      </View>
-    </TouchableOpacity>
-  );
+      </TouchableOpacity>
+    );
+  };
 
   const renderEmptyState = () => (
     <View style={styles.emptyState}>
@@ -121,19 +170,36 @@ const HistoryScreen = ({ navigation }) => {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Conversation History</Text>
         <Text style={styles.headerSubtitle}>
-          {CONVERSATION_HISTORY.length} past sessions
+          {loading ? 'Loading...' : `${conversations.length} past ${conversations.length === 1 ? 'session' : 'sessions'}`}
         </Text>
       </View>
 
       {/* Conversation List */}
-      <FlatList
-        data={CONVERSATION_HISTORY}
-        renderItem={renderConversationCard}
-        keyExtractor={(item) => item.id.toString()}
-        contentContainerStyle={styles.listContainer}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={renderEmptyState}
-      />
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Loading conversations...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={64} color={COLORS.textMuted} />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={loadConversations}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={conversations}
+          renderItem={renderConversationCard}
+          keyExtractor={(item) => item.id.toString()}
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={renderEmptyState}
+          refreshing={loading}
+          onRefresh={loadConversations}
+        />
+      )}
     </View>
   );
 };
@@ -157,6 +223,42 @@ const styles = StyleSheet.create({
   headerSubtitle: {
     fontSize: FONT_SIZES.md,
     color: COLORS.textSecondary,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+  },
+  loadingText: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+    paddingHorizontal: SPACING.xl,
+  },
+  errorText: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginBottom: SPACING.lg,
+  },
+  retryButton: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: BORDER_RADIUS.round,
+  },
+  retryButtonText: {
+    color: COLORS.text,
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
   },
   listContainer: {
     paddingHorizontal: SPACING.lg,

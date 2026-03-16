@@ -1,0 +1,40 @@
+{
+  "_comment": "Yoruba grapheme-to-phonetic hints for TTS and pronunciation. Used later for Coqui TTS and pronunciation scoring.",
+  "vowels_plain": {
+    "a": "a",
+    "e": "e",
+    "i": "i",
+    "o": "o",
+    "u": "u"
+  },
+  "vowels_tone_marks": {
+    "à": "a_low",
+    "á": "a_mid",
+    "ā": "a_high",
+    "è": "e_low",
+    "é": "e_mid",
+    "ē": "e_high",
+    "ì": "i_low",
+    "í": "i_mid",
+    "ī": "i_high",
+    "ò": "o_low",
+    "ó": "o_mid",
+    "ō": "o_high",
+    "ù": "u_low",
+    "ú": "u_mid",
+    "ū": "u_high",
+    "ẹ": "eh",
+    "ọ": "aw",
+    "ẹ̀": "eh_low",
+    "ẹ́": "eh_mid",
+    "ẹ̄": "eh_high",
+    "ọ̀": "aw_low",
+    "ọ́": "aw_mid",
+    "ọ̄": "aw_high"
+  },
+  "consonants": {
+    "ṣ": "sh",
+    "gb": "gb",
+    "n̄": "nasal_n"
+  }
+}

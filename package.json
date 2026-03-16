@@ -1,27 +1,26 @@
 {
-  "name": "afrolingo",
+  "name": "afro-ai",
   "version": "1.0.0",
-  "description": "AI conversation app for African languages",
+  "description": "AI-powered African language learning app - MERN Stack with React Native/Expo",
   "private": true,
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "mobile": "cd mobile && npm start",
+    "mobile:ios": "cd mobile && npm run ios",
+    "mobile:android": "cd mobile && npm run android",
+    "server": "cd server && npm run dev",
+    "server:start": "cd server && npm start",
+    "install:all": "cd mobile && npm install && cd ../server && npm install",
+    "seed": "cd server && npm run seed"
   },
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "lucide-react": "^0.294.0"
-  },
-  "devDependencies": {
-    "@types/react": "^18.2.43",
-    "@types/react-dom": "^18.2.17",
-    "@vitejs/plugin-react": "^4.2.1",
-    "autoprefixer": "^10.4.16",
-    "postcss": "^8.4.32",
-    "tailwindcss": "^3.3.6",
-    "typescript": "^5.3.3",
-    "vite": "^5.0.8"
-  }
+  "keywords": [
+    "language-learning",
+    "african-languages",
+    "react-native",
+    "expo",
+    "mern",
+    "ai",
+    "voice"
+  ],
+  "author": "Afro AI Team",
+  "license": "MIT"
 }
-

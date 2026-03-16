@@ -6,7 +6,7 @@ const Vocabulary = require('../models/Vocabulary');
 const { auth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { aiTutorService, elevenLabsService } = require('../services');
-const { AI_PERSONALITIES, AFRICAN_LANGUAGES } = require('../config/constants');
+const { AI_PERSONALITIES, AFRICAN_LANGUAGES, CONVERSATION_TYPES } = require('../config/constants');
 
 const router = express.Router();
 
@@ -18,6 +18,7 @@ const router = express.Router();
 router.post('/', auth, [
   body('language').isIn(Object.keys(AFRICAN_LANGUAGES)).withMessage('Invalid language'),
   body('personality').optional().isIn(Object.keys(AI_PERSONALITIES)),
+  body('conversationType').optional().isIn(Object.keys(CONVERSATION_TYPES)),
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -28,21 +29,30 @@ router.post('/', auth, [
     });
   }
 
-  const { language, personality } = req.body;
+  const { language, personality, conversationType } = req.body;
   const languageInfo = AFRICAN_LANGUAGES[language];
-  const personalityInfo = AI_PERSONALITIES[personality || req.user.aiPersonality];
+  const userPersonality = req.user?.aiPersonality || 'friendly';
+  const personalityInfo = AI_PERSONALITIES[personality || userPersonality];
+  const scenarioLabel = conversationType ? CONVERSATION_TYPES[conversationType] : null;
 
   // Create new conversation
   const conversation = new Conversation({
-    user: req.user._id,
+    user: req.user?._id || null,
     language,
-    personality: personality || req.user.aiPersonality,
-    title: `${languageInfo.name} Practice`,
+    personality: personality || userPersonality,
+    title: scenarioLabel ? `${languageInfo.name} – ${scenarioLabel}` : `${languageInfo.name} Practice`,
   });
 
-  // Generate initial greeting from AI
+  // Build initial prompt: roleplay scenario or open practice
+  const initialMessages = conversationType
+    ? [{
+        role: 'user',
+        content: `Start a short roleplay scenario in ${languageInfo.name}. Scenario: ${scenarioLabel}. Set the scene in one or two sentences (in ${languageInfo.name}), then invite the learner to respond in ${languageInfo.name}. Keep the opening under 3 sentences.`,
+      }]
+    : [];
+
   const { response: greeting, vocabularyWords } = await aiTutorService.generateResponse(
-    [],
+    initialMessages,
     language,
     conversation.personality
   );
@@ -50,13 +60,16 @@ router.post('/', auth, [
   // Generate audio for greeting
   let audioUrl = null;
   try {
+    const voiceSpeed = req.user?.voiceSpeed || 'normal';
     const audioResult = await elevenLabsService.textToSpeech(greeting, {
-      speed: req.user.voiceSpeed,
+      speed: voiceSpeed,
+      language: language, // Pass language for optimized Yoruba/African language pronunciation
     });
     audioUrl = audioResult.audioUrl;
+    console.log('✅ Successfully generated audio for greeting');
   } catch (audioError) {
-    console.error('Failed to generate audio:', audioError);
-    // Continue without audio
+    console.warn('⚠️ Failed to generate audio with ElevenLabs (will use device TTS as fallback):', audioError.message);
+    // Continue without audio - frontend will use device TTS as fallback
   }
 
   // Add system message and greeting
@@ -66,14 +79,16 @@ router.post('/', auth, [
   await conversation.save();
 
   // Save vocabulary words
-  if (vocabularyWords.length > 0) {
+  if (vocabularyWords.length > 0 && req.user?._id) {
     await saveVocabularyWords(req.user._id, language, vocabularyWords, conversation._id);
   }
 
   // Update user stats
-  req.user.stats.totalConversations += 1;
-  req.user.updateStreak();
-  await req.user.save();
+  if (req.user) {
+    req.user.stats.totalConversations += 1;
+    req.user.updateStreak();
+    await req.user.save();
+  }
 
   res.status(201).json({
     success: true,
@@ -109,7 +124,7 @@ router.post('/:id/message', auth, [
 
   const conversation = await Conversation.findOne({
     _id: req.params.id,
-    user: req.user._id,
+    ...(req.user?._id ? { user: req.user._id } : {}), // In dev mode, allow any user if no user set
   });
 
   if (!conversation) {
@@ -147,11 +162,14 @@ router.post('/:id/message', auth, [
   let audioUrl = null;
   try {
     const audioResult = await elevenLabsService.textToSpeech(aiResponse, {
-      speed: req.user.voiceSpeed,
+      speed: req.user?.voiceSpeed || 'normal',
+      language: conversation.language, // Pass language for optimized pronunciation
     });
     audioUrl = audioResult.audioUrl;
+    console.log('✅ Successfully generated audio for AI response');
   } catch (audioError) {
-    console.error('Failed to generate audio:', audioError);
+    console.warn('⚠️ Failed to generate audio with ElevenLabs (will use device TTS as fallback):', audioError.message);
+    // Continue without audio - frontend will use device TTS as fallback
   }
 
   // Add AI response
@@ -160,7 +178,7 @@ router.post('/:id/message', auth, [
   await conversation.save();
 
   // Save vocabulary words
-  if (vocabularyWords.length > 0) {
+  if (vocabularyWords.length > 0 && req.user?._id) {
     await saveVocabularyWords(req.user._id, conversation.language, vocabularyWords, conversation._id);
     req.user.stats.wordsLearned += vocabularyWords.length;
     await req.user.save();
@@ -195,7 +213,7 @@ router.get('/:id/suggestions', auth, [
 ], asyncHandler(async (req, res) => {
   const conversation = await Conversation.findOne({
     _id: req.params.id,
-    user: req.user._id,
+    ...(req.user?._id ? { user: req.user._id } : {}), // In dev mode, allow any user if no user set
   });
 
   if (!conversation) {
@@ -236,7 +254,7 @@ router.get('/', auth, [
   const limit = parseInt(req.query.limit) || 10;
   const skip = (page - 1) * limit;
 
-  const filter = { user: req.user._id };
+  const filter = req.user?._id ? { user: req.user._id } : {}; // In dev mode, allow all conversations if no user
   if (req.query.status) filter.status = req.query.status;
   if (req.query.language) filter.language = req.query.language;
 
@@ -276,7 +294,7 @@ router.get('/:id', auth, [
 ], asyncHandler(async (req, res) => {
   const conversation = await Conversation.findOne({
     _id: req.params.id,
-    user: req.user._id,
+    ...(req.user?._id ? { user: req.user._id } : {}), // In dev mode, allow any user if no user set
   });
 
   if (!conversation) {
@@ -308,7 +326,7 @@ router.put('/:id/end', auth, [
 ], asyncHandler(async (req, res) => {
   const conversation = await Conversation.findOne({
     _id: req.params.id,
-    user: req.user._id,
+    ...(req.user?._id ? { user: req.user._id } : {}), // In dev mode, allow any user if no user set
   });
 
   if (!conversation) {

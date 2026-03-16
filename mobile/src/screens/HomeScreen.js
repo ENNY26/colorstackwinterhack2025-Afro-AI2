@@ -7,18 +7,37 @@ import {
   TouchableOpacity,
   Animated,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
-import { AFRICAN_LANGUAGES, CONVERSATION_HISTORY, VOCABULARY_DATA } from '../constants/mockData';
+import { getGreetingForLanguage, getRandomFunFact } from '../constants/homeGreetings';
+import { conversationAPI, vocabularyAPI, languagesAPI, userAPI } from '../services';
 
 const { width } = Dimensions.get('window');
 
-const HomeScreen = ({ navigation }) => {
-  const [selectedLanguage] = useState(AFRICAN_LANGUAGES[0]);
+const HomeScreen = ({ navigation, route }) => {
+  const plan = route.params?.plan;
+  const [selectedLanguage, setSelectedLanguage] = useState(null);
+  const [recentConversations, setRecentConversations] = useState([]);
+  const [learnedWordsCount, setLearnedWordsCount] = useState(0);
+  const [practiceStreak, setPracticeStreak] = useState(0);
+  const [languages, setLanguages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [funFact] = useState(() => getRandomFunFact());
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
+
+  useEffect(() => {
+    if (plan?.language && plan?.languageName && !selectedLanguage) {
+      setSelectedLanguage({
+        id: plan.language,
+        name: plan.languageName,
+        flag: plan.flag || '🇳🇬',
+      });
+    }
+  }, [plan]);
 
   useEffect(() => {
     Animated.parallel([
@@ -33,11 +52,82 @@ const HomeScreen = ({ navigation }) => {
         useNativeDriver: true,
       }),
     ]).start();
+    
+    loadData();
   }, []);
 
-  const recentConversations = CONVERSATION_HISTORY.slice(0, 3);
-  const learnedWordsCount = VOCABULARY_DATA.length;
-  const practiceStreak = 5;
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      
+      // Load languages first (most important)
+      try {
+        const languagesResult = await languagesAPI.getAll();
+        if (languagesResult.success && languagesResult.data.languages) {
+          const langs = languagesResult.data.languages;
+          setLanguages(langs);
+          if (langs.length > 0 && !selectedLanguage) {
+            setSelectedLanguage(langs[0]);
+          }
+        }
+      } catch (langErr) {
+        console.error('Failed to load languages:', langErr);
+        // Continue loading other data even if languages fail
+      }
+
+      // Load other data in parallel (but with delays to avoid rate limiting)
+      await Promise.allSettled([
+        // Load recent conversations
+        (async () => {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
+            const conversationsResult = await conversationAPI.getConversations({ limit: 3 });
+            if (conversationsResult.success && conversationsResult.data.conversations) {
+              setRecentConversations(conversationsResult.data.conversations);
+            }
+          } catch (err) {
+            console.error('Failed to load conversations:', err);
+          }
+        })(),
+        
+        // Load vocabulary stats
+        (async () => {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 200)); // Small delay
+            if (selectedLanguage || languages.length > 0) {
+              const langId = selectedLanguage?.id || languages[0]?.id || 'yoruba';
+              const vocabResult = await vocabularyAPI.getStats(langId);
+              if (vocabResult.success && vocabResult.data.stats) {
+                const stats = vocabResult.data.stats[0];
+                if (stats) {
+                  setLearnedWordsCount(stats.totalWords || 0);
+                }
+              }
+            }
+          } catch (err) {
+            console.error('Failed to load vocabulary stats:', err);
+          }
+        })(),
+        
+        // Load user stats (streak)
+        (async () => {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 300)); // Small delay
+            const userStatsResult = await userAPI.getStats();
+            if (userStatsResult.success && userStatsResult.data.stats) {
+              setPracticeStreak(userStatsResult.data.stats.streak || 0);
+            }
+          } catch (err) {
+            console.error('Failed to load user stats:', err);
+          }
+        })(),
+      ]);
+    } catch (err) {
+      console.error('Failed to load home screen data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <ScrollView
@@ -67,36 +157,58 @@ const HomeScreen = ({ navigation }) => {
           end={{ x: 1, y: 1 }}
         >
           <View style={styles.headerTop}>
-            <View>
-              <Text style={styles.greeting}>Ẹ kú àárọ̀! 👋</Text>
-              <Text style={styles.greetingTranslation}>Good morning!</Text>
-            </View>
+          <View>
+            <Text style={styles.greeting}>
+              {selectedLanguage ? getGreetingForLanguage(selectedLanguage.id).native + ' 👋' : 'Hello! 👋'}
+            </Text>
+            <Text style={styles.greetingTranslation}>
+              {selectedLanguage ? getGreetingForLanguage(selectedLanguage.id).english : 'Welcome back'}
+            </Text>
+          </View>
+          {selectedLanguage && (
             <View style={styles.languageBadge}>
-              <Text style={styles.languageFlag}>{selectedLanguage.flag}</Text>
+              <Text style={styles.languageFlag}>{selectedLanguage.flag || '🇳🇬'}</Text>
               <Text style={styles.languageName}>{selectedLanguage.name}</Text>
             </View>
+          )}
           </View>
+
+          <TouchableOpacity
+            style={styles.streakBanner}
+            activeOpacity={0.8}
+            onPress={() => navigation.navigate('StreakStats')}
+          >
+            <Ionicons name="flame" size={28} color={COLORS.text} />
+            <View style={styles.streakTextWrap}>
+              <Text style={styles.streakValue}>{loading ? '...' : practiceStreak}</Text>
+              <Text style={styles.streakLabel}>day streak</Text>
+            </View>
+          </TouchableOpacity>
 
           <View style={styles.statsRow}>
             <View style={styles.stat}>
-              <Text style={styles.statValue}>{learnedWordsCount}</Text>
+              <Text style={styles.statValue}>{loading ? '...' : learnedWordsCount}</Text>
               <Text style={styles.statLabel}>Words Learned</Text>
             </View>
             <View style={styles.statDivider} />
             <View style={styles.stat}>
-              <Text style={styles.statValue}>{practiceStreak}</Text>
-              <Text style={styles.statLabel}>Day Streak 🔥</Text>
-            </View>
-            <View style={styles.statDivider} />
-            <View style={styles.stat}>
-              <Text style={styles.statValue}>{recentConversations.length}</Text>
+              <Text style={styles.statValue}>{loading ? '...' : recentConversations.length}</Text>
               <Text style={styles.statLabel}>Conversations</Text>
             </View>
           </View>
         </LinearGradient>
       </Animated.View>
 
-      {/* Quick Start Card */}
+      {/* Fun fact */}
+      <Animated.View style={[styles.funFactCard, { opacity: fadeAnim }]}>
+        <View style={styles.funFactIconWrap}>
+          <Ionicons name="bulb" size={22} color={COLORS.primary} />
+        </View>
+        <Text style={styles.funFactLabel}>Did you know?</Text>
+        <Text style={styles.funFactText}>{funFact}</Text>
+      </Animated.View>
+
+      {/* Start Roleplay – main CTA (links to conversation/roleplay flow) */}
       <Animated.View
         style={[
           styles.quickStartCard,
@@ -108,24 +220,33 @@ const HomeScreen = ({ navigation }) => {
       >
         <TouchableOpacity
           style={styles.quickStartButton}
-          onPress={() => navigation.navigate('Conversation', { language: selectedLanguage })}
+          onPress={() => {
+            if (!selectedLanguage) return;
+            const planForRoleplay = plan || {
+              language: selectedLanguage.id,
+              languageName: selectedLanguage.name,
+              flag: selectedLanguage.flag,
+            };
+            navigation.navigate('RoleplayCategories', { plan: planForRoleplay });
+          }}
           activeOpacity={0.9}
+          disabled={!selectedLanguage}
         >
           <LinearGradient
-            colors={[COLORS.surface, COLORS.surfaceLight]}
+            colors={COLORS.gradientOrange}
             style={styles.quickStartGradient}
           >
             <View style={styles.quickStartContent}>
               <View style={styles.quickStartIcon}>
-                <Ionicons name="mic" size={32} color={COLORS.primary} />
+                <Ionicons name="chatbubbles" size={32} color={COLORS.text} />
               </View>
               <View style={styles.quickStartText}>
-                <Text style={styles.quickStartTitle}>Start Practicing</Text>
+                <Text style={styles.quickStartTitle}>Start Roleplay</Text>
                 <Text style={styles.quickStartSubtitle}>
-                  Continue learning {selectedLanguage.name}
+                  {loading ? 'Loading...' : selectedLanguage ? `Pick a scenario & chat in ${selectedLanguage.name}` : 'Select a language to start'}
                 </Text>
               </View>
-              <Ionicons name="arrow-forward-circle" size={32} color={COLORS.primary} />
+              <Ionicons name="arrow-forward-circle" size={32} color={COLORS.text} />
             </View>
           </LinearGradient>
         </TouchableOpacity>
@@ -164,7 +285,7 @@ const HomeScreen = ({ navigation }) => {
               <View style={styles.progressIconContainer}>
                 <Ionicons name="chatbubbles" size={24} color={COLORS.success} />
               </View>
-              <Text style={styles.progressValue}>{CONVERSATION_HISTORY.length}</Text>
+              <Text style={styles.progressValue}>{loading ? '...' : recentConversations.length}</Text>
               <Text style={styles.progressLabel}>Sessions</Text>
             </LinearGradient>
           </TouchableOpacity>
@@ -192,26 +313,42 @@ const HomeScreen = ({ navigation }) => {
             <Text style={styles.seeAll}>See All</Text>
           </TouchableOpacity>
         </View>
-        {recentConversations.map((conversation, index) => (
-          <TouchableOpacity
-            key={conversation.id}
-            style={styles.activityCard}
-            onPress={() => navigation.navigate('Conversation', { language: selectedLanguage })}
-          >
-            <View style={styles.activityIcon}>
-              <Text style={styles.activityFlag}>{conversation.flag}</Text>
-            </View>
-            <View style={styles.activityContent}>
-              <Text style={styles.activityTitle}>{conversation.languageName} Practice</Text>
-              <Text style={styles.activitySubtitle} numberOfLines={1}>
-                {conversation.preview}
-              </Text>
-            </View>
-            <View style={styles.activityMeta}>
-              <Text style={styles.activityDuration}>{conversation.duration}</Text>
-            </View>
-          </TouchableOpacity>
-        ))}
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="small" color={COLORS.primary} />
+            <Text style={styles.loadingText}>Loading conversations...</Text>
+          </View>
+        ) : recentConversations.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No recent conversations. Start practicing to see your activity here!</Text>
+          </View>
+        ) : (
+          recentConversations.map((conversation) => (
+            <TouchableOpacity
+              key={conversation.id}
+              style={styles.activityCard}
+              onPress={() => navigation.navigate('Conversation', { 
+                language: { id: conversation.language, name: conversation.languageName || conversation.language, flag: conversation.flag || '🇳🇬' },
+                conversationId: conversation.id 
+              })}
+            >
+              <View style={styles.activityIcon}>
+                <Text style={styles.activityFlag}>{conversation.flag || '🇳🇬'}</Text>
+              </View>
+              <View style={styles.activityContent}>
+                <Text style={styles.activityTitle}>{conversation.languageName || conversation.language} Practice</Text>
+                <Text style={styles.activitySubtitle} numberOfLines={1}>
+                  {conversation.lastMessage?.content || conversation.preview || 'No messages yet'}
+                </Text>
+              </View>
+              <View style={styles.activityMeta}>
+                <Text style={styles.activityDuration}>
+                  {conversation.duration ? `${Math.round(conversation.duration)}m` : 'Recent'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))
+        )}
       </View>
 
       {/* Languages Section */}
@@ -227,28 +364,35 @@ const HomeScreen = ({ navigation }) => {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.languagesScroll}
         >
-          {AFRICAN_LANGUAGES.slice(0, 5).map((lang) => (
-            <TouchableOpacity
-              key={lang.id}
-              style={[
-                styles.languageChip,
-                lang.id === selectedLanguage.id && styles.languageChipActive,
-              ]}
-              onPress={() =>
-                navigation.navigate('Conversation', { language: lang })
-              }
-            >
-              <Text style={styles.languageChipFlag}>{lang.flag}</Text>
-              <Text
+          {loading ? (
+            <ActivityIndicator size="small" color={COLORS.primary} style={{ marginRight: SPACING.md }} />
+          ) : languages.length === 0 ? (
+            <Text style={styles.emptyText}>No languages available</Text>
+          ) : (
+            languages.slice(0, 5).map((lang) => (
+              <TouchableOpacity
+                key={lang.id}
                 style={[
-                  styles.languageChipName,
-                  lang.id === selectedLanguage.id && styles.languageChipNameActive,
+                  styles.languageChip,
+                  lang.id === selectedLanguage?.id && styles.languageChipActive,
                 ]}
+                onPress={() => {
+                  setSelectedLanguage(lang);
+                  navigation.navigate('Conversation', { language: lang });
+                }}
               >
-                {lang.name}
-              </Text>
-            </TouchableOpacity>
-          ))}
+                <Text style={styles.languageChipFlag}>{lang.flag || '🇳🇬'}</Text>
+                <Text
+                  style={[
+                    styles.languageChipName,
+                    lang.id === selectedLanguage?.id && styles.languageChipNameActive,
+                  ]}
+                >
+                  {lang.name}
+                </Text>
+              </TouchableOpacity>
+            ))
+          )}
         </ScrollView>
       </View>
     </ScrollView>
@@ -328,6 +472,45 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     opacity: 0.8,
     marginTop: 2,
+  },
+  streakBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: BORDER_RADIUS.lg,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.md,
+    marginBottom: SPACING.md,
+  },
+  streakTextWrap: { marginLeft: SPACING.sm },
+  streakValue: { fontSize: FONT_SIZES.xl, fontWeight: 'bold', color: COLORS.text },
+  streakLabel: { fontSize: FONT_SIZES.xs, color: COLORS.text, opacity: 0.9 },
+  funFactCard: {
+    marginHorizontal: SPACING.lg,
+    marginBottom: SPACING.lg,
+    backgroundColor: COLORS.surface,
+    borderRadius: BORDER_RADIUS.lg,
+    padding: SPACING.md,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary,
+  },
+  funFactIconWrap: {
+    position: 'absolute',
+    top: SPACING.md,
+    right: SPACING.md,
+  },
+  funFactLabel: {
+    fontSize: FONT_SIZES.xs,
+    color: COLORS.primary,
+    fontWeight: '600',
+    marginBottom: SPACING.xs,
+  },
+  funFactText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
+    lineHeight: 20,
   },
   statDivider: {
     width: 1,
@@ -496,6 +679,24 @@ const styles = StyleSheet.create({
   languageChipNameActive: {
     color: COLORS.primary,
     fontWeight: '600',
+  },
+  loadingContainer: {
+    paddingVertical: SPACING.lg,
+    alignItems: 'center',
+  },
+  loadingText: {
+    marginTop: SPACING.sm,
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
+  },
+  emptyContainer: {
+    paddingVertical: SPACING.lg,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: FONT_SIZES.sm,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
   },
 });
 

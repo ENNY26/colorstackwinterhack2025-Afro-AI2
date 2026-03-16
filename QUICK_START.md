@@ -1,141 +1,214 @@
-# Quick Start Guide
+# Afro AI - Quick Start Guide
 
-## Prerequisites
+## Current Status ✅
 
-### Mobile App
-- Node.js 16+ and npm
-- Expo CLI (`npm install -g expo-cli`)
-- Expo Go app on your phone
+Based on the API check, you have:
+- ✅ **Anthropic API Key** - Configured (for AI conversations)
+- ✅ **ElevenLabs API Key** - Configured (for Text-to-Speech)
+- ✅ **ElevenLabs Voice ID** - Configured
+- ✅ **MongoDB URI** - Configured
+- ✅ **JWT Secret** - Configured
+- ❌ **OpenAI API Key** - **MISSING** (REQUIRED for Speech-to-Text)
 
-### Backend
-- Go 1.21+
-- PostgreSQL database
-- OpenAI API key
-- AWS account (for S3)
+## The Problem 🔴
 
-## Mobile App Setup
+You're seeing "Network Error" because:
+1. **Backend server is not running** - The mobile app can't connect
+2. **Missing OpenAI API Key** - Even if backend runs, Whisper (STT) won't work
 
-1. Navigate to mobile directory:
+## Solution: 3 Steps to Get Everything Working 🚀
+
+### Step 1: Add OpenAI API Key
+
+**Why?** OpenAI Whisper is required to transcribe user's speech (Speech-to-Text).
+
+1. Get your OpenAI API key:
+   - Go to https://platform.openai.com/api-keys
+   - Sign up/Login
+   - Create new API key
+   - Copy the key (starts with `sk-`)
+
+2. Add to `server/.env`:
+   ```env
+   OPENAI_API_KEY=sk-your-openai-api-key-here
+   ```
+
+### Step 2: Start the Backend Server
+
+**Windows:**
+```bash
+cd server
+start-backend.bat
+```
+
+**Mac/Linux:**
+```bash
+cd server
+chmod +x start-backend.sh
+./start-backend.sh
+```
+
+**Or manually:**
+```bash
+cd server
+npm run dev
+```
+
+You should see:
+```
+🚀 Afro AI Server running on port 5000
+📊 Environment: development
+🔗 Health check: http://localhost:5000/health
+```
+
+### Step 3: Start the Mobile App
+
+**In a new terminal:**
 ```bash
 cd mobile
+npx expo start
 ```
 
-2. Install dependencies:
+Scan the QR code with Expo Go app, or press:
+- `i` for iOS Simulator
+- `a` for Android Emulator
+- `w` for Web
+
+## Complete API Flow (When Everything Works) 🔄
+
+When you press and hold the PTT button:
+
+```
+1. 📱 User Records Audio
+   ↓
+2. 🔄 POST /api/audio/transcribe
+   API: OpenAI Whisper
+   Converts speech → text
+   ↓
+3. 💬 POST /api/conversations/:id/message
+   API: Anthropic Claude
+   Generates AI response in target language
+   ↓
+4. 🔊 POST /api/audio/synthesize
+   API: ElevenLabs TTS
+   Converts AI response text → audio
+   ↓
+5. 📱 Mobile App Plays Audio
+   User hears AI speaking
+   ↓
+6. 💾 MongoDB
+   Saves vocabulary words automatically
+```
+
+## Testing if Everything Works ✅
+
+1. **Check backend is running:**
+   ```bash
+   curl http://localhost:5000/health
+   ```
+   Should return: `{"success":true,"message":"Afro AI Server is running"}`
+
+2. **Check all API keys:**
+   ```bash
+   cd server
+   npm run check-apis
+   ```
+   All should show ✅
+
+3. **Test in mobile app:**
+   - Open ConversationScreen
+   - Press and hold PTT button
+   - Speak something
+   - Release button
+   - You should hear AI response!
+
+## Troubleshooting 🔧
+
+### "Network Error" in Mobile App
+
+**Problem:** Backend not running
+
+**Solution:**
 ```bash
-npm install
+cd server
+npm run dev
 ```
 
-3. Start the development server:
+Make sure you see: `🚀 Afro AI Server running on port 5000`
+
+### "Authentication Required"
+
+**Problem:** Need to login/register first
+
+**Solution:** The app should handle registration automatically, but if not:
 ```bash
-npm start
-```
-
-4. Scan QR code with Expo Go app or press `a` for Android / `i` for iOS
-
-## Backend Setup
-
-1. Navigate to backend directory:
-```bash
-cd backend
-```
-
-2. Install Go dependencies:
-```bash
-go mod download
-```
-
-3. Set up environment variables:
-```bash
-cp .env.example .env
-```
-
-4. Edit `.env` and fill in:
-   - Database credentials
-   - JWT secret
-   - OpenAI API key
-   - AWS credentials
-   - S3 bucket name
-
-5. Set up PostgreSQL database:
-```sql
-CREATE DATABASE afrolingo;
-```
-
-6. Run the server:
-```bash
-go run cmd/server/main.go
-```
-
-Or use Make:
-```bash
-make run
-```
-
-The server will start on `http://localhost:8080`
-
-## Testing the API
-
-### Health Check
-```bash
-curl http://localhost:8080/health
-```
-
-### Register a User
-```bash
-curl -X POST http://localhost:8080/api/v1/auth/register \
+# Register a user
+curl -X POST http://localhost:5000/api/auth/register \
   -H "Content-Type: application/json" \
   -d '{
     "email": "test@example.com",
-    "username": "testuser",
-    "password": "password123"
+    "password": "password123",
+    "name": "Test User"
   }'
 ```
 
-### Login
-```bash
-curl -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{
-    "email": "test@example.com",
-    "password": "password123"
-  }'
-```
+### Audio Not Playing on Physical Device
 
-## Connecting Mobile App to Backend
+**Problem:** `localhost` doesn't work on physical devices
 
-Update the API base URL in your mobile app configuration:
-
+**Solution:** Update `mobile/src/services/api.js`:
 ```javascript
-// mobile/src/constants/api.js (create this file)
-export const API_BASE_URL = 'http://localhost:8080/api/v1';
+const API_BASE = __DEV__ 
+  ? 'http://192.168.1.XXX:5000'  // Replace XXX with your computer's IP
+  : 'https://your-production-url.com';
 ```
 
-For Android emulator, use `http://10.0.2.2:8080`
-For iOS simulator, use `http://localhost:8080`
-For physical device, use your computer's IP address: `http://YOUR_IP:8080`
+Find your IP:
+- **Windows:** `ipconfig` (look for IPv4 Address)
+- **Mac/Linux:** `ifconfig` or `ip addr`
 
-## Next Steps
+### "Transcription failed" Error
 
-1. Set up your OpenAI API key
-2. Configure AWS S3 bucket
-3. Update mobile app to connect to backend
-4. Test the full flow: register → login → create conversation → send message
+**Problem:** Missing or invalid OpenAI API key
 
-## Troubleshooting
+**Solution:**
+1. Check `server/.env` has `OPENAI_API_KEY=sk-...`
+2. Verify key is valid at https://platform.openai.com/api-keys
+3. Restart backend server after adding key
 
-### Backend won't start
-- Check PostgreSQL is running
-- Verify database credentials in `.env`
-- Ensure port 8080 is not in use
+### APIs Not Being Called
 
-### Mobile app can't connect to backend
-- Check backend is running
-- Verify CORS settings in backend
-- Use correct IP address for your device
-- Check firewall settings
+**Problem:** Backend server not running or unreachable
 
-### Database connection errors
-- Ensure PostgreSQL is installed and running
-- Verify database exists: `CREATE DATABASE afrolingo;`
-- Check connection string in `.env`
+**Solution:**
+1. Start backend: `cd server && npm run dev`
+2. Check it's running: `curl http://localhost:5000/health`
+3. Check mobile app can reach it (update API_BASE if needed)
+4. Check console logs for network errors
 
+## What Each API Does 🎯
+
+| API | Purpose | When Called | Required For |
+|-----|---------|-------------|--------------|
+| **OpenAI Whisper** | Speech-to-Text | User releases PTT | Transcribing audio |
+| **Anthropic Claude** | AI Language Tutor | After transcription | Generating responses |
+| **ElevenLabs TTS** | Text-to-Speech | After AI response | Speaking responses |
+| **MongoDB** | Data Storage | Auto-save | Vocabulary tracking |
+
+## Next Steps 📝
+
+1. ✅ Add OpenAI API key to `server/.env`
+2. ✅ Start backend: `cd server && npm run dev`
+3. ✅ Start mobile: `cd mobile && npx expo start`
+4. ✅ Test conversation flow
+5. ✅ Check console logs to see API calls
+
+## Need Help? 🆘
+
+- See `server/SETUP_GUIDE.md` for detailed API setup
+- Check `server/README.md` for API documentation
+- Check console logs for specific error messages
+
+---
+
+**All APIs must be configured and backend must be running for full functionality!**

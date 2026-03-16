@@ -1,4 +1,4 @@
-export { default as api } from './api';
+export { default as api, API_BASE } from './api';
 export { 
   authAPI, 
   userAPI, 
@@ -6,6 +6,6 @@ export {
   vocabularyAPI, 
   audioAPI, 
   languagesAPI, 
-  tipsAPI 
+  tipsAPI
 } from './api';
 

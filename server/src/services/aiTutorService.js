@@ -2,6 +2,16 @@ const OpenAI = require('openai');
 const axios = require('axios');
 const { AI_PERSONALITIES, AFRICAN_LANGUAGES } = require('../config/constants');
 
+/**
+ * Claude Model Configuration:
+ * Set CLAUDE_MODEL in .env to choose the model:
+ * - claude-sonnet-4-5 (default): Best balance of speed and intelligence ($3/$15 per MTok)
+ * - claude-haiku-4-5: Fastest and most affordable ($1/$5 per MTok) 
+ * - claude-opus-4-5: Maximum intelligence, premium ($5/$25 per MTok)
+ * 
+ * Example: CLAUDE_MODEL=claude-sonnet-4-5
+ */
+
 // Initialize OpenAI client
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -90,15 +100,30 @@ const generateResponseClaude = async (messages, language, personalityId) => {
   try {
     const systemPrompt = generateSystemPrompt(language, personalityId);
 
-    const formattedMessages = messages.map(msg => ({
+    // Claude requires at least one user message. If empty, add a welcome message
+    let formattedMessages = messages.map(msg => ({
       role: msg.role === 'assistant' ? 'assistant' : 'user',
       content: msg.content,
     }));
 
+    // If no messages, add a welcome message to initiate conversation
+    if (formattedMessages.length === 0) {
+      const languageInfo = AFRICAN_LANGUAGES[language];
+      formattedMessages = [{
+        role: 'user',
+        content: `Hello! I want to start learning ${languageInfo.name}. Please greet me and help me begin.`
+      }];
+    }
+
+    // Use Claude 4.5 models - configurable via environment variable
+    // Options: claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-5
+    // Default: claude-sonnet-4-5 (best balance of speed and intelligence)
+    const claudeModel = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+    
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
-        model: 'claude-3-sonnet-20240229',
+        model: claudeModel,
         max_tokens: 500,
         system: systemPrompt,
         messages: formattedMessages,
@@ -148,6 +173,7 @@ const generateResponse = async (messages, language, personalityId) => {
 const generateSuggestedResponses = async (messages, language) => {
   try {
     const languageInfo = AFRICAN_LANGUAGES[language];
+    const provider = process.env.AI_PROVIDER || 'openai';
 
     const prompt = `Based on this conversation, suggest 3 simple responses in ${languageInfo.name} that a beginner learner could use. 
 
@@ -158,20 +184,54 @@ SUGGESTION 3: [${languageInfo.name} text] | [English translation]
 
 Keep suggestions simple and appropriate for the conversation context.`;
 
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
-      messages: [
-        ...messages.map(msg => ({ role: msg.role, content: msg.content })),
+    if (provider === 'anthropic') {
+      // Use Anthropic for suggestions
+      const formattedMessages = [
+        ...messages.map(msg => ({
+          role: msg.role === 'assistant' ? 'assistant' : 'user',
+          content: msg.content,
+        })),
         { role: 'user', content: prompt },
-      ],
-      temperature: 0.5,
-      max_tokens: 300,
-    });
+      ];
 
-    const responseText = completion.choices[0].message.content;
-    const suggestions = parseSuggestedResponses(responseText);
+      // Use same Claude model as configured for main responses
+      const claudeModel = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+      
+      const response = await axios.post(
+        'https://api.anthropic.com/v1/messages',
+        {
+          model: claudeModel,
+          max_tokens: 300,
+          messages: formattedMessages,
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY,
+            'anthropic-version': '2023-06-01',
+          },
+        }
+      );
 
-    return suggestions;
+      const responseText = response.data.content[0].text;
+      const suggestions = parseSuggestedResponses(responseText);
+      return suggestions;
+    } else {
+      // Use OpenAI for suggestions
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4-turbo-preview',
+        messages: [
+          ...messages.map(msg => ({ role: msg.role, content: msg.content })),
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.5,
+        max_tokens: 300,
+      });
+
+      const responseText = completion.choices[0].message.content;
+      const suggestions = parseSuggestedResponses(responseText);
+      return suggestions;
+    }
   } catch (error) {
     console.error('Failed to generate suggestions:', error);
     return [];

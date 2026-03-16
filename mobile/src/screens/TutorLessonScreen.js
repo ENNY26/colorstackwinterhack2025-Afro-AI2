@@ -30,9 +30,8 @@ function evaluatePronunciation(expected, actual) {
   return matches / Math.max(expectedWords.length, 1);
 }
 
-// Get phrases: prefer AI-generated plan lessons for this category, else static list
+// Use only AI-generated plan lessons when plan has lessons; no dummy/static data then
 function getPhrases(plan, langId, category) {
-  const staticPhrases = getPhrasesForCategory(langId, category);
   const lessons = plan?.lessons || [];
   const lesson = lessons.find(
     (l) => (l.title || '').toLowerCase().includes((category || '').toLowerCase())
@@ -43,7 +42,11 @@ function getPhrases(plan, langId, category) {
       english: s.english || s.translation || 'Listen and repeat',
     })).filter((p) => p.native);
   }
-  return staticPhrases;
+  // Fallback to static only when plan has no lessons (e.g. offline/API failed)
+  if (lessons.length === 0) {
+    return getPhrasesForCategory(langId, category);
+  }
+  return [];
 }
 
 const TutorLessonScreen = ({ navigation, route }) => {
@@ -61,6 +64,7 @@ const TutorLessonScreen = ({ navigation, route }) => {
   const currentPhrase = stepIndex >= 0 && stepIndex < phrases.length ? phrases[stepIndex] : null;
   const isWelcome = stepIndex === -1;
   const isComplete = stepIndex >= phrases.length && phrases.length > 0;
+  const hasNoContent = phrases.length === 0;
 
   // Play phrase using backend TTS (ElevenLabs) for natural pronunciation; fallback to device TTS
   const playPhraseWithTTS = async (text) => {
@@ -199,8 +203,22 @@ const TutorLessonScreen = ({ navigation, route }) => {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {/* No content (plan has lessons but this category has no steps) */}
+        {hasNoContent && (
+          <View style={styles.emptyCard}>
+            <Ionicons name="document-text-outline" size={48} color={COLORS.textMuted} />
+            <Text style={styles.emptyTitle}>No lesson content here</Text>
+            <Text style={styles.emptyText}>
+              This category has no steps in your plan. Choose another category or create a new plan.
+            </Text>
+            <TouchableOpacity style={styles.backToCategories} onPress={() => navigation.navigate('TutorCategories', { plan })}>
+              <Text style={styles.backToCategoriesText}>Choose another category</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Welcome step */}
-        {isWelcome && (
+        {!hasNoContent && isWelcome && (
           <>
             <Text style={styles.welcomeTitle}>Welcome to your personalized {langName} {category} lesson</Text>
             <Text style={styles.welcomeText}>
@@ -220,7 +238,7 @@ const TutorLessonScreen = ({ navigation, route }) => {
         )}
 
         {/* Current phrase step */}
-        {currentPhrase && !isComplete && (
+        {!hasNoContent && currentPhrase && !isComplete && (
           <>
             <View style={styles.phraseCard}>
               <Text style={styles.phraseNative}>{currentPhrase.native}</Text>
@@ -292,7 +310,7 @@ const TutorLessonScreen = ({ navigation, route }) => {
         )}
 
         {/* Lesson complete */}
-        {isComplete && (
+        {!hasNoContent && isComplete && (
           <View style={styles.completeCard}>
             <Ionicons name="checkmark-circle" size={64} color={COLORS.success} />
             <Text style={styles.completeTitle}>Lesson complete!</Text>
@@ -435,6 +453,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.xl,
   },
   homeButtonText: { color: COLORS.primary, fontWeight: '600' },
+  emptyCard: {
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+    paddingHorizontal: SPACING.lg,
+  },
+  emptyTitle: { fontSize: FONT_SIZES.xl, fontWeight: 'bold', color: COLORS.text, marginTop: SPACING.md },
+  emptyText: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary, textAlign: 'center', marginTop: SPACING.sm, marginBottom: SPACING.lg },
+  backToCategories: { paddingVertical: SPACING.md, paddingHorizontal: SPACING.xl },
+  backToCategoriesText: { color: COLORS.primary, fontWeight: '600' },
 });
 
 export default TutorLessonScreen;

@@ -1,0 +1,19 @@
+# Install from the ai_speech_service folder: cd ai_speech_service then pip install -r requirements.txt
+#
+# Dataset and processing
+pandas>=2.0.0
+numpy>=1.24.0
+
+# API
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+python-multipart>=0.0.6
+
+# Speech: Whisper (OpenAI) for transcription
+openai-whisper>=20231117
+
+# Speech: Coqui TTS for text-to-speech (optional)
+# Coqui TTS supports Python 3.9–3.11 only. On Python 3.12, omit this and
+# POST /generate-audio will return 503. To use TTS, use Python 3.10 or 3.11 and:
+#   pip install TTS>=0.22.0
+# TTS>=0.22.0

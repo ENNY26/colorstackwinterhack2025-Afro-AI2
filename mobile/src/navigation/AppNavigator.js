@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -6,11 +6,22 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, BORDER_RADIUS } from '../constants/colors';
+import { authAPI } from '../services';
 
 // Screens
 import OnboardingScreen from '../screens/OnboardingScreen';
+import LoginScreen from '../screens/LoginScreen';
+import SignupScreen from '../screens/SignupScreen';
 import LanguageSelectionScreen from '../screens/LanguageSelectionScreen';
 import PersonalitySelectionScreen from '../screens/PersonalitySelectionScreen';
+import SurveyScreen from '../screens/SurveyScreen';
+import PlanSummaryScreen from '../screens/PlanSummaryScreen';
+import ModeSelectionScreen from '../screens/ModeSelectionScreen';
+import TutorCategoriesScreen from '../screens/TutorCategoriesScreen';
+import TutorLessonScreen from '../screens/TutorLessonScreen';
+import RoleplayCategoriesScreen from '../screens/RoleplayCategoriesScreen';
+import RoleplaySummaryScreen from '../screens/RoleplaySummaryScreen';
+import StreakStatsScreen from '../screens/StreakStatsScreen';
 import ConversationScreen from '../screens/ConversationScreen';
 import VocabularyScreen from '../screens/VocabularyScreen';
 import SettingsScreen from '../screens/SettingsScreen';
@@ -83,6 +94,7 @@ function MainTabs({ route }) {
       <Tab.Screen
         name="Home"
         component={HomeScreen}
+        initialParams={initialParams}
         options={{ tabBarLabel: 'Home' }}
       />
       <Tab.Screen
@@ -105,11 +117,21 @@ function MainTabs({ route }) {
   );
 }
 
-function AppNavigator() {
+function AppNavigator({ isAuthenticated = false }) {
+  // Determine initial route based on authentication
+  const getInitialRoute = () => {
+    if (isAuthenticated) {
+      return "MainTabs";
+    }
+    // Show onboarding only on first launch, otherwise go to login
+    // For now, always go to login if not authenticated
+    return "Onboarding";
+  };
+
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName="Onboarding"
+        initialRouteName={getInitialRoute()}
         screenOptions={{
           headerShown: false,
           animation: 'slide_from_right',
@@ -122,6 +144,20 @@ function AppNavigator() {
           component={OnboardingScreen}
           options={{ animation: 'fade' }}
         />
+        
+        {/* Authentication Flow */}
+        <Stack.Screen
+          name="Login"
+          component={LoginScreen}
+          options={{ animation: 'slide_from_right' }}
+        />
+        <Stack.Screen
+          name="Signup"
+          component={SignupScreen}
+          options={{ animation: 'slide_from_right' }}
+        />
+        
+        {/* Language Selection (after auth) */}
         <Stack.Screen
           name="LanguageSelection"
           component={LanguageSelectionScreen}
@@ -129,6 +165,34 @@ function AppNavigator() {
         <Stack.Screen
           name="PersonalitySelection"
           component={PersonalitySelectionScreen}
+        />
+        <Stack.Screen
+          name="Survey"
+          component={SurveyScreen}
+        />
+        <Stack.Screen
+          name="PlanSummary"
+          component={PlanSummaryScreen}
+        />
+        <Stack.Screen
+          name="ModeSelection"
+          component={ModeSelectionScreen}
+        />
+        <Stack.Screen
+          name="TutorCategories"
+          component={TutorCategoriesScreen}
+        />
+        <Stack.Screen
+          name="TutorLesson"
+          component={TutorLessonScreen}
+        />
+        <Stack.Screen
+          name="RoleplayCategories"
+          component={RoleplayCategoriesScreen}
+        />
+        <Stack.Screen
+          name="RoleplaySummary"
+          component={RoleplaySummaryScreen}
         />
 
         {/* Main App with Bottom Tabs */}
@@ -142,6 +206,10 @@ function AppNavigator() {
         <Stack.Screen
           name="History"
           component={HistoryScreen}
+        />
+        <Stack.Screen
+          name="StreakStats"
+          component={StreakStatsScreen}
         />
       </Stack.Navigator>
     </NavigationContainer>

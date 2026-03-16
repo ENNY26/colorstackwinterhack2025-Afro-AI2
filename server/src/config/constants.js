@@ -121,7 +121,7 @@ const AI_PERSONALITIES = {
   },
 };
 
-// Conversation types
+// Conversation / roleplay scenario types
 const CONVERSATION_TYPES = {
   casual: 'Casual conversation practice',
   greetings: 'Greetings and introductions',
@@ -131,6 +131,9 @@ const CONVERSATION_TYPES = {
   travel: 'Travel and directions',
   shopping: 'Shopping and bargaining',
   culture: 'Cultural expressions and proverbs',
+  making_friends: 'Making friends and small talk',
+  directions: 'Asking for and giving directions',
+  emergency: 'Emergency and asking for help',
 };
 
 // Voice speed options

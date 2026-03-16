@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,59 +7,119 @@ import {
   FlatList,
   TextInput,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
-import { VOCABULARY_DATA } from '../constants/mockData';
+import { vocabularyAPI, audioAPI } from '../services';
+import { Alert } from 'react-native';
 
 const TABS = ['All', 'Recent', 'Favorites'];
 
 const VocabularyScreen = ({ navigation }) => {
   const [activeTab, setActiveTab] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
-  const [vocabularyList, setVocabularyList] = useState(VOCABULARY_DATA);
+  const [vocabularyList, setVocabularyList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedLanguage, setSelectedLanguage] = useState('yoruba');
+
+  useEffect(() => {
+    loadVocabulary();
+  }, [selectedLanguage]);
+
+  const loadVocabulary = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      const result = await vocabularyAPI.getVocabulary({ language: selectedLanguage });
+      
+      if (result.success && result.data.vocabulary) {
+        // Ensure vocabulary is an array
+        const vocabulary = Array.isArray(result.data.vocabulary) 
+          ? result.data.vocabulary 
+          : [];
+        setVocabularyList(vocabulary);
+      } else {
+        setError('Failed to load vocabulary');
+        setVocabularyList([]);
+      }
+    } catch (err) {
+      console.error('Failed to load vocabulary:', err);
+      setError('Failed to load vocabulary. Please try again.');
+      setVocabularyList([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const filteredVocabulary = useMemo(() => {
+    // Ensure vocabularyList is an array
+    if (!Array.isArray(vocabularyList)) {
+      return [];
+    }
+    
     let filtered = [...vocabularyList];
 
     // Filter by tab
     if (activeTab === 'Recent') {
       const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      filtered = filtered.filter((word) => new Date(word.learnedAt) >= oneWeekAgo);
+      filtered = filtered.filter((word) => {
+        if (!word) return false;
+        const learnedDate = word.learnedAt || word.createdAt;
+        return learnedDate && new Date(learnedDate) >= oneWeekAgo;
+      });
     } else if (activeTab === 'Favorites') {
-      filtered = filtered.filter((word) => word.isFavorite);
+      filtered = filtered.filter((word) => word && word.isFavorite === true);
     }
 
     // Filter by search
     if (searchQuery) {
       filtered = filtered.filter(
         (word) =>
-          word.word.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          word.translation.toLowerCase().includes(searchQuery.toLowerCase())
+          word &&
+          ((word.word && word.word.toLowerCase().includes(searchQuery.toLowerCase())) ||
+          (word.translation && word.translation.toLowerCase().includes(searchQuery.toLowerCase())))
       );
     }
 
     return filtered;
   }, [vocabularyList, activeTab, searchQuery]);
 
-  const toggleFavorite = (wordId) => {
-    console.log('Toggle favorite:', wordId);
-    setVocabularyList((prev) =>
-      prev.map((word) =>
-        word.id === wordId ? { ...word, isFavorite: !word.isFavorite } : word
-      )
-    );
+  const toggleFavorite = async (wordId) => {
+    try {
+      const result = await vocabularyAPI.toggleFavorite(wordId);
+      if (result.success) {
+        // Reload vocabulary to get updated favorite status
+        await loadVocabulary();
+      }
+    } catch (err) {
+      console.error('Failed to toggle favorite:', err);
+      Alert.alert('Error', 'Failed to update favorite status. Please try again.');
+    }
   };
 
-  const playPronunciation = (word) => {
-    console.log('Playing pronunciation for:', word.word);
-    // Audio playback would go here
+  const playPronunciation = async (word) => {
+    try {
+      const result = await audioAPI.pronounce(word.word, word.language || selectedLanguage);
+      if (result.success && result.data.audioUrl) {
+        // Play audio using Audio API
+        const { Audio } = require('expo-av');
+        const { sound } = await Audio.Sound.createAsync({ uri: result.data.audioUrl });
+        await sound.playAsync();
+      }
+    } catch (err) {
+      console.error('Failed to play pronunciation:', err);
+      Alert.alert('Error', 'Failed to play pronunciation. Please try again.');
+    }
   };
 
   const formatLearnedDate = (date) => {
+    if (!date) return 'Unknown';
     const now = new Date();
-    const diffDays = Math.floor((now - new Date(date)) / (1000 * 60 * 60 * 24));
+    const learnedDate = new Date(date);
+    const diffDays = Math.floor((now - learnedDate) / (1000 * 60 * 60 * 24));
     if (diffDays === 0) return 'Today';
     if (diffDays === 1) return 'Yesterday';
     if (diffDays < 7) return `${diffDays} days ago`;
@@ -83,16 +143,21 @@ const VocabularyScreen = ({ navigation }) => {
   };
 
   const renderVocabularyCard = ({ item, index }) => {
+    // Guard against invalid items
+    if (!item) {
+      return null;
+    }
+    
     return (
       <Animated.View style={styles.cardWrapper}>
         <View style={styles.vocabCard}>
           <View style={styles.cardLeft}>
-            <Text style={styles.wordText}>{item.word}</Text>
-            <Text style={styles.translationText}>{item.translation}</Text>
+            <Text style={styles.wordText}>{item.word || 'Unknown'}</Text>
+            <Text style={styles.translationText}>{item.translation || 'No translation'}</Text>
             <View style={styles.cardMeta}>
               <Ionicons name="time-outline" size={12} color={COLORS.textMuted} />
               <Text style={styles.metaText}>
-                Learned {formatLearnedDate(item.learnedAt)}
+                Learned {formatLearnedDate(item.learnedAt || item.createdAt)}
               </Text>
             </View>
           </View>
@@ -105,7 +170,13 @@ const VocabularyScreen = ({ navigation }) => {
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.actionButton}
-              onPress={() => toggleFavorite(item.id)}
+              onPress={() => {
+                if (item?.id) {
+                  toggleFavorite(item.id);
+                } else {
+                  Alert.alert('Error', 'Cannot toggle favorite: Word ID is missing');
+                }
+              }}
             >
               <Ionicons
                 name={item.isFavorite ? 'star' : 'star-outline'}
@@ -166,7 +237,7 @@ const VocabularyScreen = ({ navigation }) => {
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Vocabulary Library</Text>
         <Text style={styles.headerSubtitle}>
-          {vocabularyList.length} words learned
+          {loading ? 'Loading...' : `${vocabularyList.length} words learned`}
         </Text>
       </View>
 
@@ -193,14 +264,38 @@ const VocabularyScreen = ({ navigation }) => {
       </View>
 
       {/* Vocabulary List */}
-      <FlatList
-        data={filteredVocabulary}
-        renderItem={renderVocabularyCard}
-        keyExtractor={(item) => item.id.toString()}
-        contentContainerStyle={styles.listContainer}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={renderEmptyState}
-      />
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Loading vocabulary...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={64} color={COLORS.textMuted} />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={loadVocabulary}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredVocabulary}
+          renderItem={renderVocabularyCard}
+          keyExtractor={(item, index) => {
+            // Handle cases where id might be undefined or null
+            if (item?.id != null) {
+              return String(item.id);
+            }
+            // Fallback to index and word combination for unique key
+            return `vocab-${index}-${item?.word || 'unknown'}-${item?.translation || ''}`;
+          }}
+          contentContainerStyle={styles.listContainer}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={renderEmptyState}
+          refreshing={loading}
+          onRefresh={loadVocabulary}
+        />
+      )}
     </View>
   );
 };
@@ -365,6 +460,42 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     fontWeight: 'bold',
     color: COLORS.text,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+  },
+  loadingText: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+    paddingHorizontal: SPACING.xl,
+  },
+  errorText: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginBottom: SPACING.lg,
+  },
+  retryButton: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: BORDER_RADIUS.round,
+  },
+  retryButtonText: {
+    color: COLORS.text,
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
   },
 });
 

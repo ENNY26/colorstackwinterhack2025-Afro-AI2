@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,11 +8,12 @@ import {
   TextInput,
   Dimensions,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
-import { AFRICAN_LANGUAGES } from '../constants/mockData';
+import { languagesAPI } from '../services';
 
 const { width } = Dimensions.get('window');
 const CARD_WIDTH = (width - SPACING.lg * 3) / 2;
@@ -20,13 +21,64 @@ const CARD_WIDTH = (width - SPACING.lg * 3) / 2;
 const LanguageSelectionScreen = ({ navigation }) => {
   const [selectedLanguage, setSelectedLanguage] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [languages, setLanguages] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [scaleAnim] = useState(new Animated.Value(1));
 
-  const filteredLanguages = AFRICAN_LANGUAGES.filter(
+  useEffect(() => {
+    loadLanguages();
+  }, []);
+
+  const loadLanguages = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Try to load from API
+      try {
+        const result = await languagesAPI.getAll();
+        
+        if (result.success && result.data.languages) {
+          setLanguages(result.data.languages);
+          setLoading(false);
+          return;
+        }
+      } catch (apiErr) {
+        console.warn('API call failed, using fallback languages:', apiErr.message);
+      }
+      
+      // Fallback to static language list if API fails
+      const fallbackLanguages = [
+        { id: 'yoruba', name: 'Yoruba', nativeName: 'Èdè Yorùbá', flag: '🇳🇬', region: 'Nigeria', speakers: '45M+' },
+        { id: 'swahili', name: 'Swahili', nativeName: 'Kiswahili', flag: '🇹🇿', region: 'East Africa', speakers: '100M+' },
+        { id: 'hausa', name: 'Hausa', nativeName: 'Harshen Hausa', flag: '🇳🇬', region: 'West Africa', speakers: '70M+' },
+        { id: 'zulu', name: 'Zulu', nativeName: 'isiZulu', flag: '🇿🇦', region: 'South Africa', speakers: '12M+' },
+        { id: 'amharic', name: 'Amharic', nativeName: 'አማርኛ', flag: '🇪🇹', region: 'Ethiopia', speakers: '32M+' },
+        { id: 'igbo', name: 'Igbo', nativeName: 'Asụsụ Igbo', flag: '🇳🇬', region: 'Nigeria', speakers: '45M+' },
+        { id: 'xhosa', name: 'Xhosa', nativeName: 'isiXhosa', flag: '🇿🇦', region: 'South Africa', speakers: '8M+' },
+        { id: 'akan', name: 'Akan', nativeName: 'Akan', flag: '🇬🇭', region: 'Ghana', speakers: '11M+' },
+      ];
+      
+      setLanguages(fallbackLanguages);
+      if (!error) {
+        console.log('Using fallback language data');
+      }
+    } catch (err) {
+      console.error('Failed to load languages:', err);
+      setError('Failed to load languages. Please check your connection.');
+      // Still set fallback languages
+      setLanguages([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredLanguages = languages.filter(
     (lang) =>
-      lang.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lang.nativeName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lang.region.toLowerCase().includes(searchQuery.toLowerCase())
+      lang.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      lang.nativeName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      lang.region?.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   const handleLanguageSelect = (language) => {
@@ -85,26 +137,32 @@ const LanguageSelectionScreen = ({ navigation }) => {
             <Text style={[styles.languageName, isSelected && styles.languageNameSelected]}>
               {item.name}
             </Text>
-            <Text style={[styles.nativeName, isSelected && styles.nativeNameSelected]}>
-              {item.nativeName}
-            </Text>
-            <View style={styles.exampleContainer}>
-              <Text style={[styles.nativeExample, isSelected && styles.nativeExampleSelected]}>
-                "{item.nativeExample}"
+            {item.nativeName && item.nativeName !== item.name && (
+              <Text style={[styles.nativeName, isSelected && styles.nativeNameSelected]}>
+                {item.nativeName}
               </Text>
-            </View>
-            <View style={styles.badgeContainer}>
-              <View style={[styles.badge, isSelected && styles.badgeSelected]}>
-                <Ionicons
-                  name="people"
-                  size={12}
-                  color={isSelected ? COLORS.text : COLORS.textMuted}
-                />
-                <Text style={[styles.badgeText, isSelected && styles.badgeTextSelected]}>
-                  {item.speakers}
+            )}
+            {item.nativeExample && (
+              <View style={styles.exampleContainer}>
+                <Text style={[styles.nativeExample, isSelected && styles.nativeExampleSelected]}>
+                  "{item.nativeExample}"
                 </Text>
               </View>
-            </View>
+            )}
+            {item.speakers && (
+              <View style={styles.badgeContainer}>
+                <View style={[styles.badge, isSelected && styles.badgeSelected]}>
+                  <Ionicons
+                    name="people"
+                    size={12}
+                    color={isSelected ? COLORS.text : COLORS.textMuted}
+                  />
+                  <Text style={[styles.badgeText, isSelected && styles.badgeTextSelected]}>
+                    {item.speakers}
+                  </Text>
+                </View>
+              </View>
+            )}
             {isSelected && (
               <View style={styles.checkmark}>
                 <Ionicons name="checkmark-circle" size={24} color={COLORS.text} />
@@ -157,20 +215,39 @@ const LanguageSelectionScreen = ({ navigation }) => {
       </View>
 
       {/* Languages Grid */}
-      <FlatList
-        data={filteredLanguages}
-        renderItem={renderLanguageCard}
-        keyExtractor={(item) => item.id}
-        numColumns={2}
-        contentContainerStyle={styles.gridContainer}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="search-outline" size={48} color={COLORS.textMuted} />
-            <Text style={styles.emptyText}>No languages found</Text>
-          </View>
-        }
-      />
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={COLORS.primary} />
+          <Text style={styles.loadingText}>Loading languages...</Text>
+        </View>
+      ) : error ? (
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={64} color={COLORS.textMuted} />
+          <Text style={styles.errorText}>{error}</Text>
+          <TouchableOpacity style={styles.retryButton} onPress={loadLanguages}>
+            <Text style={styles.retryButtonText}>Retry</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <FlatList
+          data={filteredLanguages}
+          renderItem={renderLanguageCard}
+          keyExtractor={(item) => item.id}
+          numColumns={2}
+          contentContainerStyle={styles.gridContainer}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Ionicons name="search-outline" size={48} color={COLORS.textMuted} />
+              <Text style={styles.emptyText}>
+                {searchQuery ? 'No languages found' : 'No languages available'}
+              </Text>
+            </View>
+          }
+          refreshing={loading}
+          onRefresh={loadLanguages}
+        />
+      )}
 
       {/* Continue Button */}
       <View style={styles.bottomSection}>
@@ -366,6 +443,42 @@ const styles = StyleSheet.create({
     fontSize: FONT_SIZES.md,
     color: COLORS.textMuted,
     marginTop: SPACING.md,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+  },
+  loadingText: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: SPACING.xxl,
+    paddingHorizontal: SPACING.xl,
+  },
+  errorText: {
+    marginTop: SPACING.md,
+    fontSize: FONT_SIZES.md,
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+    marginBottom: SPACING.lg,
+  },
+  retryButton: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: SPACING.sm,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: BORDER_RADIUS.round,
+  },
+  retryButtonText: {
+    color: COLORS.text,
+    fontSize: FONT_SIZES.md,
+    fontWeight: '600',
   },
   bottomSection: {
     position: 'absolute',

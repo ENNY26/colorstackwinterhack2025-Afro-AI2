@@ -30,13 +30,13 @@ const OnboardingScreen = ({ navigation }) => {
   };
 
   const handleGetStarted = () => {
-    console.log('Get Started pressed - navigating to Language Selection');
-    navigation.replace('LanguageSelection');
+    console.log('Get Started pressed - navigating to Login');
+    navigation.replace('Login');
   };
 
   const handleSkip = () => {
-    console.log('Skip pressed - navigating to Language Selection');
-    navigation.replace('LanguageSelection');
+    console.log('Skip pressed - navigating to Login');
+    navigation.replace('Login');
   };
 
   const renderSlide = ({ item, index }) => {

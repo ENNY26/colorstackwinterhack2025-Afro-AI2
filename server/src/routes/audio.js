@@ -14,10 +14,19 @@ const router = express.Router();
  * @access  Private
  */
 router.post('/transcribe', auth, uploadAudio.single('audio'), asyncHandler(async (req, res) => {
+  // Check if file was uploaded
   if (!req.file) {
+    console.error('Transcribe error: No audio file received');
+    console.error('Request body:', req.body);
+    console.error('Request files:', req.files);
+    
     return res.status(400).json({
       success: false,
-      message: 'No audio file provided',
+      message: 'No audio file provided. Please ensure the audio file is sent with the field name "audio".',
+      details: {
+        hasFile: !!req.file,
+        bodyKeys: Object.keys(req.body),
+      },
     });
   }
 
@@ -43,9 +52,30 @@ router.post('/transcribe', auth, uploadAudio.single('audio'), asyncHandler(async
       },
     });
   } catch (error) {
+    console.error('Transcription error:', error);
+    console.error('Error stack:', error.stack);
+    console.error('File info:', req.file ? {
+      path: req.file.path,
+      mimetype: req.file.mimetype,
+      size: req.file.size,
+      filename: req.file.filename,
+    } : 'No file received');
+    
     // Clean up file on error
-    deleteUploadedFile(req.file.path);
-    throw error;
+    if (req.file && req.file.path) {
+      try {
+        deleteUploadedFile(req.file.path);
+      } catch (deleteErr) {
+        console.error('Failed to delete file:', deleteErr);
+      }
+    }
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to transcribe audio',
+      error: error.message || 'Unknown error',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    });
   }
 }));
 
@@ -87,6 +117,7 @@ router.post('/transcribe-buffer', auth, uploadAudioToMemory.single('audio'), asy
 router.post('/synthesize', auth, [
   body('text').trim().notEmpty().withMessage('Text is required'),
   body('speed').optional().isIn(['slow', 'normal', 'fast']),
+  body('language').optional().isString(),
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -97,19 +128,35 @@ router.post('/synthesize', auth, [
     });
   }
 
-  const { text, speed, voiceId } = req.body;
+  const { text, speed, voiceId, language } = req.body;
 
-  const result = await elevenLabsService.textToSpeech(text, {
-    speed: speed || req.user.voiceSpeed,
-    voiceId,
-  });
+  try {
+    // Use language from request, or try to get from user's selected language
+    const targetLanguage = language || req.user?.selectedLanguage || null;
+    
+    const result = await elevenLabsService.textToSpeech(text, {
+      speed: speed || req.user?.voiceSpeed || 'normal',
+      voiceId,
+      language: targetLanguage, // Pass language for optimized pronunciation
+    });
 
-  res.json({
-    success: true,
-    data: {
-      audioUrl: result.audioUrl,
-    },
-  });
+    res.json({
+      success: true,
+      data: {
+        audioUrl: result.audioUrl,
+      },
+    });
+  } catch (error) {
+    console.error('Synthesis error in /api/audio/synthesize:', error.message);
+    
+    // Return error response instead of throwing (which would be caught by asyncHandler)
+    return res.status(503).json({
+      success: false,
+      message: 'Text-to-speech service unavailable',
+      error: error.message,
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined,
+    });
+  }
 }));
 
 /**
