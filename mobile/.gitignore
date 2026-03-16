@@ -18,3 +18,8 @@ web-build/
 .env
 .env.local
 .env.*.local
+node_modules
+
+venv
+
+__pycache__
