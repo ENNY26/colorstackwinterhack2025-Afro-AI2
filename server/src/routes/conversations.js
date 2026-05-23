@@ -35,26 +35,33 @@ router.post('/', auth, [
   const personalityInfo = AI_PERSONALITIES[personality || userPersonality];
   const scenarioLabel = conversationType ? CONVERSATION_TYPES[conversationType] : null;
 
+  const aiMode = conversationType ? 'roleplay' : 'practice';
+
   // Create new conversation
   const conversation = new Conversation({
     user: req.user?._id || null,
     language,
     personality: personality || userPersonality,
     title: scenarioLabel ? `${languageInfo.name} – ${scenarioLabel}` : `${languageInfo.name} Practice`,
+    conversationType: conversationType || null,
   });
 
   // Build initial prompt: roleplay scenario or open practice
   const initialMessages = conversationType
     ? [{
         role: 'user',
-        content: `Start a short roleplay scenario in ${languageInfo.name}. Scenario: ${scenarioLabel}. Set the scene in one or two sentences (in ${languageInfo.name}), then invite the learner to respond in ${languageInfo.name}. Keep the opening under 3 sentences.`,
+        content:
+          `Voice roleplay in ${languageInfo.name} only. Scenario: ${scenarioLabel}. You are the NPC. ` +
+          `Reply ONLY in ${languageInfo.name} — no English, no translations. ` +
+          `Open in character with 2–3 short sentences, then one question to continue the scene.`,
       }]
     : [];
 
   const { response: greeting, vocabularyWords } = await aiTutorService.generateResponse(
     initialMessages,
     language,
-    conversation.personality
+    conversation.personality,
+    { mode: aiMode }
   );
 
   // Generate audio for greeting
@@ -73,7 +80,10 @@ router.post('/', auth, [
   }
 
   // Add system message and greeting
-  conversation.addMessage('system', aiTutorService.generateSystemPrompt(language, conversation.personality));
+  conversation.addMessage(
+    'system',
+    aiTutorService.generateSystemPrompt(language, conversation.personality, { mode: aiMode })
+  );
   conversation.addMessage('assistant', greeting, { audioUrl, vocabularyWords });
 
   await conversation.save();
@@ -151,11 +161,14 @@ router.post('/:id/message', auth, [
     .filter(m => m.role !== 'system')
     .map(m => ({ role: m.role, content: m.content }));
 
+  const aiMode = conversation.conversationType ? 'roleplay' : 'practice';
+
   // Generate AI response
   const { response: aiResponse, vocabularyWords } = await aiTutorService.generateResponse(
     conversationHistory,
     conversation.language,
-    conversation.personality
+    conversation.personality,
+    { mode: aiMode }
   );
 
   // Generate audio for response
@@ -228,9 +241,11 @@ router.get('/:id/suggestions', auth, [
     .slice(-6) // Last 6 messages for context
     .map(m => ({ role: m.role, content: m.content }));
 
+  const suggestionMode = conversation.conversationType ? 'roleplay' : 'practice';
   const suggestions = await aiTutorService.generateSuggestedResponses(
     conversationHistory,
-    conversation.language
+    conversation.language,
+    { mode: suggestionMode }
   );
 
   res.json({
@@ -337,17 +352,38 @@ router.put('/:id/end', auth, [
   }
 
   conversation.endConversation();
+
+  let sessionReview = null;
+  if (conversation.conversationType) {
+    try {
+      const history = conversation.messages
+        .filter((m) => m.role !== 'system')
+        .map((m) => ({ role: m.role, content: m.content }));
+      sessionReview = await aiTutorService.generateRoleplaySessionReview(
+        history,
+        conversation.language,
+        conversation.conversationType
+      );
+    } catch (reviewErr) {
+      console.warn('Roleplay session review failed:', reviewErr.message);
+    }
+  }
+
   await conversation.save();
 
   // Update user stats
   req.user.stats.totalMinutesPracticed += conversation.stats.durationMinutes;
   await req.user.save();
 
+  const baseSummary = conversation.getSummary();
   res.json({
     success: true,
     message: 'Conversation ended',
     data: {
-      summary: conversation.getSummary(),
+      summary: {
+        ...baseSummary,
+        ...(sessionReview ? { sessionReview } : {}),
+      },
     },
   });
 }));

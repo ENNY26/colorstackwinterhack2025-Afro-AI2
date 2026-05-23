@@ -1,6 +1,6 @@
 const OpenAI = require('openai');
 const axios = require('axios');
-const { AI_PERSONALITIES, AFRICAN_LANGUAGES } = require('../config/constants');
+const { AI_PERSONALITIES, AFRICAN_LANGUAGES, CONVERSATION_TYPES } = require('../config/constants');
 
 /**
  * Claude Model Configuration:
@@ -18,14 +18,30 @@ const openai = new OpenAI({
 });
 
 /**
- * Generate system prompt for AI tutor
+ * Generate system prompt for AI tutor or roleplay NPC
  * @param {string} language - Target language ID
  * @param {string} personalityId - Personality ID
+ * @param {{ mode?: 'practice' | 'roleplay' }} [options]
  * @returns {string} System prompt
  */
-const generateSystemPrompt = (language, personalityId) => {
+const generateSystemPrompt = (language, personalityId, options = {}) => {
   const languageInfo = AFRICAN_LANGUAGES[language];
   const personality = AI_PERSONALITIES[personalityId] || AI_PERSONALITIES.friendly;
+  const mode = options.mode || 'practice';
+
+  if (mode === 'roleplay') {
+    return `You are a native speaker playing ONE character in a real-life scenario in ${languageInfo.name} (${languageInfo.nativeName}).
+
+Character vibe (only through natural speech in ${languageInfo.name}, never as a teacher): ${personality.description}
+
+ROLEPLAY RULES — follow strictly:
+1. Speak ONLY in ${languageInfo.name}. Do not use English anywhere in your reply — no English sentences, no English in parentheses, no translations, no glosses, no mixed-language lines.
+2. Stay in the scene: short, natural replies like a real conversation. React to what the other person said.
+3. Do NOT act as a language tutor. Forbidden (never output these patterns): praise or feedback like "good job", "great job", "well done", "nice", "excellent", "perfect", "very good", "that's right", comments about what they "said" or "used" or "pronounced", tips like "try to" / "remember to", or any coaching tone. No *asterisks*, [brackets], or teacher asides.
+4. If the user pasted a phrase from help / "I'm stuck" suggestions, treat it as their normal in-character line — answer in ${languageInfo.name} only, as the NPC would, with zero meta-commentary about the phrase.
+5. If the user is stuck or uses English, continue the scene in ${languageInfo.name} only (e.g. repeat a question, offer a simple choice).
+6. Keep each reply to a few sentences unless the scene needs more.`;
+  }
 
   return `You are an AI language tutor helping users learn ${languageInfo.name} (${languageInfo.nativeName}).
 
@@ -53,9 +69,9 @@ Start conversations warmly with an appropriate greeting in ${languageInfo.name}.
  * @param {string} personalityId - Personality ID
  * @returns {Promise<{response: string, vocabularyWords: Array}>}
  */
-const generateResponseOpenAI = async (messages, language, personalityId) => {
+const generateResponseOpenAI = async (messages, language, personalityId, options = {}) => {
   try {
-    const systemPrompt = generateSystemPrompt(language, personalityId);
+    const systemPrompt = generateSystemPrompt(language, personalityId, options);
 
     const formattedMessages = [
       { role: 'system', content: systemPrompt },
@@ -65,13 +81,14 @@ const generateResponseOpenAI = async (messages, language, personalityId) => {
       })),
     ];
 
+    const isRoleplay = options.mode === 'roleplay';
     const completion = await openai.chat.completions.create({
       model: 'gpt-4-turbo-preview',
       messages: formattedMessages,
-      temperature: 0.7,
+      temperature: isRoleplay ? 0.35 : 0.7,
       max_tokens: 500,
-      presence_penalty: 0.1,
-      frequency_penalty: 0.1,
+      presence_penalty: isRoleplay ? 0 : 0.1,
+      frequency_penalty: isRoleplay ? 0 : 0.1,
     });
 
     const response = completion.choices[0].message.content;
@@ -96,9 +113,9 @@ const generateResponseOpenAI = async (messages, language, personalityId) => {
  * @param {string} personalityId - Personality ID
  * @returns {Promise<{response: string, vocabularyWords: Array}>}
  */
-const generateResponseClaude = async (messages, language, personalityId) => {
+const generateResponseClaude = async (messages, language, personalityId, options = {}) => {
   try {
-    const systemPrompt = generateSystemPrompt(language, personalityId);
+    const systemPrompt = generateSystemPrompt(language, personalityId, options);
 
     // Claude requires at least one user message. If empty, add a welcome message
     let formattedMessages = messages.map(msg => ({
@@ -111,7 +128,9 @@ const generateResponseClaude = async (messages, language, personalityId) => {
       const languageInfo = AFRICAN_LANGUAGES[language];
       formattedMessages = [{
         role: 'user',
-        content: `Hello! I want to start learning ${languageInfo.name}. Please greet me and help me begin.`
+        content: options.mode === 'roleplay'
+          ? `Begin the scene in ${languageInfo.name} only, in character. No English.`
+          : `Hello! I want to start learning ${languageInfo.name}. Please greet me and help me begin.`,
       }];
     }
 
@@ -120,11 +139,13 @@ const generateResponseClaude = async (messages, language, personalityId) => {
     // Default: claude-sonnet-4-5 (best balance of speed and intelligence)
     const claudeModel = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5';
     
+    const isRoleplay = options.mode === 'roleplay';
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: claudeModel,
         max_tokens: 500,
+        temperature: isRoleplay ? 0.35 : 0.7,
         system: systemPrompt,
         messages: formattedMessages,
       },
@@ -154,14 +175,14 @@ const generateResponseClaude = async (messages, language, personalityId) => {
  * Main function to generate AI response
  * Uses configured provider (OpenAI or Anthropic)
  */
-const generateResponse = async (messages, language, personalityId) => {
+const generateResponse = async (messages, language, personalityId, options = {}) => {
   const provider = process.env.AI_PROVIDER || 'openai';
 
   if (provider === 'anthropic') {
-    return generateResponseClaude(messages, language, personalityId);
+    return generateResponseClaude(messages, language, personalityId, options);
   }
 
-  return generateResponseOpenAI(messages, language, personalityId);
+  return generateResponseOpenAI(messages, language, personalityId, options);
 };
 
 /**
@@ -170,12 +191,22 @@ const generateResponse = async (messages, language, personalityId) => {
  * @param {string} language - Target language ID
  * @returns {Promise<Array>} Array of suggested responses
  */
-const generateSuggestedResponses = async (messages, language) => {
+const generateSuggestedResponses = async (messages, language, options = {}) => {
   try {
     const languageInfo = AFRICAN_LANGUAGES[language];
     const provider = process.env.AI_PROVIDER || 'openai';
+    const isRoleplay = options.mode === 'roleplay';
 
-    const prompt = `Based on this conversation, suggest 3 simple responses in ${languageInfo.name} that a beginner learner could use. 
+    const prompt = isRoleplay
+      ? `The learner is in a live voice ROLEPLAY in ${languageInfo.name}. They are stuck and need the next thing THEIR CHARACTER should say — natural, short, in-scene. Do NOT write as a teacher, coach, or narrator. No praise, no tips.
+
+Format each suggestion as:
+SUGGESTION 1: [${languageInfo.name} line only] | [English gloss for the learner to read]
+SUGGESTION 2: [${languageInfo.name} line only] | [English gloss for the learner to read]
+SUGGESTION 3: [${languageInfo.name} line only] | [English gloss for the learner to read]
+
+Keep each ${languageInfo.name} line to one short sentence when possible.`
+      : `Based on this conversation, suggest 3 simple responses in ${languageInfo.name} that a beginner learner could use. 
 
 Format each suggestion as:
 SUGGESTION 1: [${languageInfo.name} text] | [English translation]
@@ -289,6 +320,77 @@ const parseSuggestedResponses = (responseText) => {
 /**
  * Translate text between languages
  */
+/**
+ * After roleplay ends: bilingual recap, pronunciation tips, natural phrasing (tutor tone OK here only).
+ */
+const generateRoleplaySessionReview = async (messages, language, conversationType) => {
+  const languageInfo = AFRICAN_LANGUAGES[language];
+  const scenarioLabel =
+    conversationType && CONVERSATION_TYPES[conversationType]
+      ? CONVERSATION_TYPES[conversationType]
+      : 'Roleplay';
+  const transcript = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => `${m.role}: ${m.content}`)
+    .join('\n');
+
+  const userPrompt = `The learner finished a voice roleplay in ${languageInfo.name}. Scenario: "${scenarioLabel}".
+
+Transcript:
+${transcript}
+
+Write a POST-SESSION review. This is NOT in-scene dialogue — tutoring and English explanations are OK here.
+
+Include:
+1. Brief warm encouragement, mixing ${languageInfo.name} with English glosses in parentheses where helpful.
+2. A few sample phrases from the chat (or closely related) with English glosses.
+3. A "**Pronunciation tip:**" section with 2–4 words that appeared in the dialogue and simple syllable-style hints.
+4. A "**Natural phrasing:**" section: compare more natural ${languageInfo.name} to what the learner said when relevant, grounded in this transcript (bullet points).
+5. Optional short closing practice prompts in ${languageInfo.name} with English glosses.
+
+Use markdown headings where helpful.`;
+
+  const provider = process.env.AI_PROVIDER || 'openai';
+
+  if (provider === 'anthropic') {
+    const claudeModel = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+    const response = await axios.post(
+      'https://api.anthropic.com/v1/messages',
+      {
+        model: claudeModel,
+        max_tokens: 2000,
+        system:
+          'You write clear, encouraging post-session summaries for language learners after roleplay. Follow the user structure.',
+        messages: [{ role: 'user', content: userPrompt }],
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+        },
+      }
+    );
+    return response.data.content[0].text.trim();
+  }
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4-turbo-preview',
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You write clear post-session summaries for language learners after roleplay. Follow the user structure.',
+      },
+      { role: 'user', content: userPrompt },
+    ],
+    temperature: 0.55,
+    max_tokens: 2000,
+  });
+
+  return completion.choices[0].message.content.trim();
+};
+
 const translateText = async (text, fromLanguage, toLanguage) => {
   try {
     const completion = await openai.chat.completions.create({
@@ -320,5 +422,6 @@ module.exports = {
   extractVocabularyFromResponse,
   translateText,
   generateSystemPrompt,
+  generateRoleplaySessionReview,
 };
 

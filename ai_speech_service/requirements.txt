@@ -12,6 +12,9 @@ python-multipart>=0.0.6
 # Speech: Whisper (OpenAI) for transcription
 openai-whisper>=20231117
 
+# OpenAI API (Chat Completions) for /roleplay-session
+openai>=1.30.0
+
 # Speech: Coqui TTS for text-to-speech (optional)
 # Coqui TTS supports Python 3.9–3.11 only. On Python 3.12, omit this and
 # POST /generate-audio will return 503. To use TTS, use Python 3.10 or 3.11 and:

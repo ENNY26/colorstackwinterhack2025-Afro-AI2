@@ -8,7 +8,11 @@ const ModeSelectionScreen = ({ navigation, route }) => {
 
   return (
     <View style={styles.container}>
-      <LinearGradient colors={[COLORS.background, COLORS.backgroundLight]} style={StyleSheet.absoluteFill} />
+      <LinearGradient
+        colors={[COLORS.background, COLORS.backgroundLight]}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      />
       <View style={{ padding: SPACING.lg, paddingTop: 80 }}>
         <Text style={styles.title}>Choose a mode</Text>
         <Text style={styles.subtitle}>Select how you'd like to practice today</Text>

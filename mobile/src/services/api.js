@@ -54,8 +54,14 @@ const getApiBase = () => {
 
 const API_BASE = getApiBase();
 
-// Log the API base URL in development for debugging
-if (__DEV__) {
+/** Set EXPO_PUBLIC_API_DEBUG=1 to log every request (slow in dev). */
+const API_DEBUG =
+  typeof __DEV__ !== 'undefined' &&
+  __DEV__ &&
+  typeof process !== 'undefined' &&
+  process.env?.EXPO_PUBLIC_API_DEBUG === '1';
+
+if (API_DEBUG) {
   console.log(`[API] Using base URL: ${API_BASE} (Platform: ${Platform.OS})`);
 }
 
@@ -73,29 +79,48 @@ const api = axios.create({
   },
 });
 
-// Add request interceptor for debugging
-if (__DEV__) {
+// Optional per-request logging (disabled by default — slows the UI thread in dev)
+if (API_DEBUG) {
   api.interceptors.request.use(
     (config) => {
-      console.log(`[API] ${config.method?.toUpperCase()} ${config.url}`);
-      console.log(`[API] Full URL: ${config.baseURL}${config.url}`);
+      console.log(`[API] ${config.method?.toUpperCase()} ${config.baseURL}${config.url}`);
       return config;
     },
-    (error) => {
-      console.error('[API] Request error:', error);
-      return Promise.reject(error);
-    }
+    (error) => Promise.reject(error)
   );
 }
 
 // Token storage key
 const TOKEN_KEY = 'afro_ai_token';
 const USER_KEY = 'afro_ai_user';
+/** Local-only flag: user chose "try the app" without signing in (still may get a server guest token via ensureAuthenticated). */
+const GUEST_TRY_KEY = 'afro_ai_guest_try';
+
+/** Avoid AsyncStorage read on every HTTP request (major RN perf win). */
+let authTokenKnown = false;
+let authTokenMemory = null;
+
+function setAuthTokenMemory(token) {
+  authTokenMemory = token ?? null;
+  authTokenKnown = true;
+}
+
+function clearAuthTokenMemory() {
+  authTokenMemory = null;
+  authTokenKnown = true;
+}
+
+async function getAuthTokenCached() {
+  if (authTokenKnown) return authTokenMemory;
+  authTokenMemory = await AsyncStorage.getItem(TOKEN_KEY);
+  authTokenKnown = true;
+  return authTokenMemory;
+}
 
 // Request interceptor to add auth token
 api.interceptors.request.use(
   async (config) => {
-    const token = await AsyncStorage.getItem(TOKEN_KEY);
+    const token = await getAuthTokenCached();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -107,32 +132,21 @@ api.interceptors.request.use(
 // Response interceptor for error handling
 api.interceptors.response.use(
   (response) => {
-    if (__DEV__) {
+    if (API_DEBUG) {
       console.log(`[API] ${response.config.method?.toUpperCase()} ${response.config.url} - ${response.status}`);
     }
     return response;
   },
   async (error) => {
     if (__DEV__) {
-      console.error('[API] Error:', {
-        method: error.config?.method?.toUpperCase(),
-        url: error.config?.url,
-        fullUrl: error.config ? `${error.config.baseURL}${error.config.url}` : 'N/A',
-        status: error.response?.status,
-        message: error.message,
-        code: error.code,
-        isNetworkError: !error.response,
-      });
-      // Also log server response body when available (validation error details)
-      if (error.response?.data) {
-        console.error('[API] Response body:', error.response.data);
-      }
+      const url = error.config?.url || '';
+      const status = error.response?.status;
+      console.warn(`[API] ${error.config?.method?.toUpperCase()} ${url}`, status ?? error.code ?? error.message);
     }
 
     if (error.response?.status === 401) {
-      // Token expired or invalid, clear storage
       await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
-      // You might want to redirect to login here
+      clearAuthTokenMemory();
     }
 
     return Promise.reject(error);
@@ -141,12 +155,18 @@ api.interceptors.response.use(
 
 // ============= AUTH API =============
 
+/** Single in-flight guest registration so parallel ensureAuthenticated() calls do not stack requests. */
+let ensureAuthInFlight = null;
+
 export const authAPI = {
-  register: async (data) => {
-    const response = await api.post('/auth/register', data);
+  register: async (data, axiosConfig = {}) => {
+    const { timeout = 30000, ...rest } = axiosConfig;
+    const response = await api.post('/auth/register', data, { timeout, ...rest });
     if (response.data.success) {
+      await AsyncStorage.removeItem(GUEST_TRY_KEY);
       await AsyncStorage.setItem(TOKEN_KEY, response.data.data.token);
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(response.data.data.user));
+      setAuthTokenMemory(response.data.data.token);
     }
     return response.data;
   },
@@ -154,8 +174,10 @@ export const authAPI = {
   login: async (email, password) => {
     const response = await api.post('/auth/login', { email, password });
     if (response.data.success) {
+      await AsyncStorage.removeItem(GUEST_TRY_KEY);
       await AsyncStorage.setItem(TOKEN_KEY, response.data.data.token);
       await AsyncStorage.setItem(USER_KEY, JSON.stringify(response.data.data.user));
+      setAuthTokenMemory(response.data.data.token);
     }
     return response.data;
   },
@@ -163,9 +185,17 @@ export const authAPI = {
   logout: async () => {
     try {
       await api.post('/auth/logout');
+    } catch {
+      // Offline / CORS / missing route — still clear local session
     } finally {
-      await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+      await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, GUEST_TRY_KEY]);
+      clearAuthTokenMemory();
     }
+  },
+
+  /** Mark session as "try without signing in" so the app opens main flow without email/password. */
+  setGuestTrySession: async () => {
+    await AsyncStorage.setItem(GUEST_TRY_KEY, '1');
   },
 
   getCurrentUser: async () => {
@@ -179,56 +209,65 @@ export const authAPI = {
   },
 
   isAuthenticated: async () => {
-    const token = await AsyncStorage.getItem(TOKEN_KEY);
-    return !!token;
+    const [token, guestTry] = await Promise.all([
+      getAuthTokenCached(),
+      AsyncStorage.getItem(GUEST_TRY_KEY),
+    ]);
+    return !!token || guestTry === '1';
   },
 
   // Auto-register guest user for testing/development
   ensureAuthenticated: async () => {
-    try {
-      // Check if already authenticated
-      const token = await AsyncStorage.getItem(TOKEN_KEY);
-      if (token) {
-        // Verify token is still valid
-        try {
-          await api.get('/auth/me');
-          return true;
-        } catch (err) {
-          // Token expired or invalid, clear it
-          await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
-        }
-      }
-
-      // Auto-register guest user
-      const guestEmail = `guest_${Date.now()}@afrolingo.app`;
-      const guestPassword = 'guest_' + Math.random().toString(36).substring(2, 15);
-      const guestName = 'Guest User';
-
-      console.log('Auto-registering guest user for testing...');
-      const result = await authAPI.register({
-        email: guestEmail,
-        password: guestPassword,
-        name: guestName,
-      });
-
-      if (result.success) {
-        console.log('Guest user registered successfully');
-        return true;
-      } else {
-        console.error('Failed to auto-register guest:', result.message);
-        return false;
-      }
-    } catch (err) {
-      console.error('Error ensuring authentication:', err);
-      // If registration fails due to conflict or other issues, don't attempt
-      // to guess credentials — return false so caller can handle it.
-      if (err.response?.status === 409) {
-        console.error('Guest registration conflict (409).');
-        return false;
-      }
-
-      return false;
+    if (ensureAuthInFlight) {
+      return ensureAuthInFlight;
     }
+
+    ensureAuthInFlight = (async () => {
+      try {
+        const token = await getAuthTokenCached();
+        if (token) {
+          try {
+            await api.get('/auth/me', { timeout: 8000 });
+            return true;
+          } catch (err) {
+            await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+            clearAuthTokenMemory();
+          }
+        }
+
+        const guestEmail = `guest_${Date.now()}@afrolingo.app`;
+        const guestPassword = 'guest_' + Math.random().toString(36).substring(2, 15);
+        const guestName = 'Guest User';
+
+        console.log('Auto-registering guest user for testing...');
+        const result = await authAPI.register(
+          {
+            email: guestEmail,
+            password: guestPassword,
+            name: guestName,
+          },
+          { timeout: 15000 }
+        );
+
+        if (result.success) {
+          console.log('Guest user registered successfully');
+          return true;
+        }
+        console.warn('Failed to auto-register guest:', result.message);
+        return false;
+      } catch (err) {
+        if (err.response?.status === 409) {
+          console.warn('Guest registration conflict (409).');
+          return false;
+        }
+        console.warn('Error ensuring authentication:', err?.message || err);
+        return false;
+      } finally {
+        ensureAuthInFlight = null;
+      }
+    })();
+
+    return ensureAuthInFlight;
   },
 };
 
@@ -260,7 +299,8 @@ export const userAPI = {
 
   deleteAccount: async () => {
     const response = await api.delete('/users/account');
-    await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+    await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, GUEST_TRY_KEY]);
+    clearAuthTokenMemory();
     return response.data;
   },
 };
@@ -276,7 +316,11 @@ export const conversationAPI = {
   },
 
   sendMessage: async (conversationId, content) => {
-    const response = await api.post(`/conversations/${conversationId}/message`, { content });
+    const response = await api.post(
+      `/conversations/${conversationId}/message`,
+      { content },
+      { timeout: 120000 }
+    );
     return response.data;
   },
 
@@ -412,10 +456,65 @@ export const audioAPI = {
         headers: {
           'Content-Type': 'multipart/form-data',
         },
+        timeout: 90000,
       });
       return response.data;
     } catch (error) {
       console.error('Transcription API error:', error.response?.data || error.message);
+      throw error;
+    }
+  },
+
+  /**
+   * Tutor / roleplay: transcribe + pronunciation score (proxied to ai_speech_service).
+   * @param {object} audioFile - { uri, type, name }
+   * @param {string} expectedText - target phrase
+   * @param {'tutor'|'roleplay'} [mode='tutor']
+   */
+  practiceRound: async (audioFile, expectedText, mode = 'tutor') => {
+    if (!audioFile || audioFile.uri == null || audioFile.uri === '') {
+      throw new Error('No recording file (missing URI). Finish recording and try again.');
+    }
+
+    const formData = new FormData();
+
+    if (Platform.OS === 'web') {
+      try {
+        let blob;
+        const u = audioFile.uri;
+        if (u.startsWith('blob:') || u.startsWith('data:')) {
+          const response = await fetch(u);
+          blob = await response.blob();
+        } else {
+          const response = await fetch(u);
+          blob = await response.blob();
+        }
+        const mimeType = blob.type || audioFile.type || 'audio/webm';
+        const file = new File([blob], audioFile.name || 'recording.webm', { type: mimeType });
+        formData.append('audio', file);
+      } catch (err) {
+        throw new Error(`Failed to prepare audio: ${err.message}`);
+      }
+    } else {
+      formData.append('audio', {
+        uri: audioFile.uri,
+        type: audioFile.type || 'audio/m4a',
+        name: audioFile.name || 'recording.m4a',
+      });
+    }
+
+    formData.append('expected_text', expectedText);
+    formData.append('mode', mode);
+
+    try {
+      const response = await api.post('/audio/practice-round', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+      return response.data;
+    } catch (error) {
+      console.error('practice-round API error:', error.response?.data || error.message);
       throw error;
     }
   },
@@ -455,7 +554,7 @@ export const languagesAPI = {
   },
 
   getPersonalities: async () => {
-    const response = await api.get('/languages/config/personalities');
+    const response = await api.get('/languages/config/personalities', { timeout: 15000 });
     return response.data;
   },
 

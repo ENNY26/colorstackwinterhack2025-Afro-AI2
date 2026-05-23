@@ -20,6 +20,8 @@ import ModeSelectionScreen from '../screens/ModeSelectionScreen';
 import TutorCategoriesScreen from '../screens/TutorCategoriesScreen';
 import TutorLessonScreen from '../screens/TutorLessonScreen';
 import RoleplayCategoriesScreen from '../screens/RoleplayCategoriesScreen';
+import RoleplayScenariosScreen from '../screens/RoleplayScenariosScreen';
+import RoleplayHistoryScreen from '../screens/RoleplayHistoryScreen';
 import RoleplaySummaryScreen from '../screens/RoleplaySummaryScreen';
 import StreakStatsScreen from '../screens/StreakStatsScreen';
 import ConversationScreen from '../screens/ConversationScreen';
@@ -32,8 +34,18 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs({ route }) {
-  // Get initial params passed from navigation
-  const initialParams = route.params || {};
+  /**
+   * Nested navigation passes { screen: 'Conversation', params: { conversationType, ... } }.
+   * Tab screens must receive inner `params`, not the wrapper — otherwise ConversationScreen
+   * never sees conversationType and roleplay breaks silently.
+   */
+  const outer = route?.params || {};
+  const initialParams =
+    outer.params != null &&
+    typeof outer.params === 'object' &&
+    typeof outer.screen === 'string'
+      ? outer.params
+      : outer;
 
   return (
     <Tab.Navigator
@@ -50,6 +62,8 @@ function MainTabs({ route }) {
             iconName = focused ? 'book' : 'book-outline';
           } else if (route.name === 'Settings') {
             iconName = focused ? 'settings' : 'settings-outline';
+          } else {
+            iconName = focused ? 'ellipse' : 'ellipse-outline';
           }
 
           // Special styling for the main conversation tab
@@ -189,6 +203,14 @@ function AppNavigator({ isAuthenticated = false }) {
         <Stack.Screen
           name="RoleplayCategories"
           component={RoleplayCategoriesScreen}
+        />
+        <Stack.Screen
+          name="RoleplayScenarios"
+          component={RoleplayScenariosScreen}
+        />
+        <Stack.Screen
+          name="RoleplayHistory"
+          component={RoleplayHistoryScreen}
         />
         <Stack.Screen
           name="RoleplaySummary"

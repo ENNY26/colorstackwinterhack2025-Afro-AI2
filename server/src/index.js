@@ -44,11 +44,50 @@ app.use(helmet({
   },
 }));
 
+// CORS: `credentials: true` is incompatible with `origin: '*'`. Parse CORS_ORIGIN for deployed
+// frontends; localhost / 127.0.0.1 (any port) is always allowed so Expo web works regardless of NODE_ENV.
+function isLocalDevBrowserOrigin(origin) {
+  try {
+    const u = new URL(origin);
+    const okHost = u.hostname === 'localhost' || u.hostname === '127.0.0.1';
+    return okHost && (u.protocol === 'http:' || u.protocol === 'https:');
+  } catch {
+    return false;
+  }
+}
+
+function getAllowedCorsOrigins() {
+  const raw = process.env.CORS_ORIGIN;
+  if (raw && String(raw).trim()) {
+    return String(raw)
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+const allowedCorsOrigins = getAllowedCorsOrigins();
+
 // CORS configuration
+// Always allow http(s)://localhost:* and 127.0.0.1:* so Expo web works even when NODE_ENV=production
+// (many .env templates set production while still developing against localhost:5000).
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    if (isLocalDevBrowserOrigin(origin)) {
+      return callback(null, true);
+    }
+    if (allowedCorsOrigins.length > 0 && allowedCorsOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[CORS] Rejected browser origin (set CORS_ORIGIN to allow it):', origin);
+    }
+    return callback(null, false);
+  },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'Accept'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Range', 'Accept', 'X-Requested-With'],
   exposedHeaders: ['Content-Length', 'Content-Range', 'Accept-Ranges'],
   credentials: true,
 }));
@@ -66,6 +105,7 @@ const limiter = rateLimit({
   },
   standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
   legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+  skip: (req) => req.method === 'OPTIONS',
 });
 app.use('/api/', limiter);
 

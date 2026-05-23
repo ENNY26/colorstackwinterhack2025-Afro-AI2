@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
 import { authAPI } from '../services';
 import { useAuth } from '../context/AuthContext';
+import { navigateRootStack, resetToLogin } from '../navigation/navigationHelpers';
 
 const SettingsScreen = ({ navigation }) => {
   const [voiceSpeed, setVoiceSpeed] = useState(1); // 0.5, 1, 1.5
@@ -47,20 +48,11 @@ const SettingsScreen = ({ navigation }) => {
           onPress: async () => {
             try {
               await authAPI.logout();
-              // update global auth state so App can react
-              try {
-                setIsAuthenticated(false);
-              } catch (e) {
-                // ignore if context not provided
-              }
-              // Navigate to login screen
-              navigation.reset({
-                index: 0,
-                routes: [{ name: 'Login' }],
-              });
             } catch (error) {
               console.error('Logout error:', error);
-              Alert.alert('Error', 'Failed to sign out. Please try again.');
+            } finally {
+              setIsAuthenticated(false);
+              resetToLogin(navigation);
             }
           },
         },
@@ -122,7 +114,7 @@ const SettingsScreen = ({ navigation }) => {
             value={`${selectedLanguage.flag} ${selectedLanguage.name}`}
             onPress={() => {
               console.log('Change language pressed');
-              navigation.navigate('LanguageSelection');
+              navigateRootStack(navigation, 'LanguageSelection');
             }}
           />
           <View style={styles.divider} />
@@ -132,7 +124,7 @@ const SettingsScreen = ({ navigation }) => {
             value={`${selectedPersonality.emoji} ${selectedPersonality.name}`}
             onPress={() => {
               console.log('Change personality pressed');
-              navigation.navigate('PersonalitySelection', { language: selectedLanguage });
+              navigateRootStack(navigation, 'PersonalitySelection', { language: selectedLanguage });
             }}
           />
         </View>

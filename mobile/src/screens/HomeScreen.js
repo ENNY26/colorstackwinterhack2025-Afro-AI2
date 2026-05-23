@@ -8,14 +8,23 @@ import {
   Animated,
   Dimensions,
   ActivityIndicator,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
 import { getGreetingForLanguage, getRandomFunFact } from '../constants/homeGreetings';
 import { conversationAPI, vocabularyAPI, languagesAPI, userAPI } from '../services';
+import { navigateRootStack } from '../navigation/navigationHelpers';
 
 const { width } = Dimensions.get('window');
+
+/** Used when the languages API fails so Tutor/Roleplay are not left `disabled` forever. */
+const FALLBACK_HOME_LANGUAGE = {
+  id: 'yoruba',
+  name: 'Yoruba',
+  flag: '🇳🇬',
+};
 
 const HomeScreen = ({ navigation, route }) => {
   const plan = route.params?.plan;
@@ -40,16 +49,17 @@ const HomeScreen = ({ navigation, route }) => {
   }, [plan]);
 
   useEffect(() => {
+    const useNativeDriver = Platform.OS !== 'web';
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
         duration: 600,
-        useNativeDriver: true,
+        useNativeDriver,
       }),
       Animated.timing(slideAnim, {
         toValue: 0,
         duration: 600,
-        useNativeDriver: true,
+        useNativeDriver,
       }),
     ]).start();
     
@@ -59,73 +69,65 @@ const HomeScreen = ({ navigation, route }) => {
   const loadData = async () => {
     try {
       setLoading(true);
-      
-      // Load languages first (most important)
-      try {
-        const languagesResult = await languagesAPI.getAll();
-        if (languagesResult.success && languagesResult.data.languages) {
-          const langs = languagesResult.data.languages;
-          setLanguages(langs);
-          if (langs.length > 0 && !selectedLanguage) {
-            setSelectedLanguage(langs[0]);
-          }
-        }
-      } catch (langErr) {
-        console.error('Failed to load languages:', langErr);
-        // Continue loading other data even if languages fail
+      const vocabLangId =
+        plan?.language || selectedLanguage?.id || 'yoruba';
+
+      const [languagesResult, conversationsResult, vocabResult, userStatsResult] =
+        await Promise.allSettled([
+          languagesAPI.getAll(),
+          conversationAPI.getConversations({ limit: 3 }),
+          vocabularyAPI.getStats(vocabLangId),
+          userAPI.getStats(),
+        ]);
+
+      if (
+        languagesResult.status === 'fulfilled' &&
+        languagesResult.value.success &&
+        languagesResult.value.data?.languages?.length
+      ) {
+        const langs = languagesResult.value.data.languages;
+        setLanguages(langs);
+        setSelectedLanguage((prev) => prev || langs[0]);
       }
 
-      // Load other data in parallel (but with delays to avoid rate limiting)
-      await Promise.allSettled([
-        // Load recent conversations
-        (async () => {
-          try {
-            await new Promise(resolve => setTimeout(resolve, 100)); // Small delay
-            const conversationsResult = await conversationAPI.getConversations({ limit: 3 });
-            if (conversationsResult.success && conversationsResult.data.conversations) {
-              setRecentConversations(conversationsResult.data.conversations);
-            }
-          } catch (err) {
-            console.error('Failed to load conversations:', err);
-          }
-        })(),
-        
-        // Load vocabulary stats
-        (async () => {
-          try {
-            await new Promise(resolve => setTimeout(resolve, 200)); // Small delay
-            if (selectedLanguage || languages.length > 0) {
-              const langId = selectedLanguage?.id || languages[0]?.id || 'yoruba';
-              const vocabResult = await vocabularyAPI.getStats(langId);
-              if (vocabResult.success && vocabResult.data.stats) {
-                const stats = vocabResult.data.stats[0];
-                if (stats) {
-                  setLearnedWordsCount(stats.totalWords || 0);
-                }
-              }
-            }
-          } catch (err) {
-            console.error('Failed to load vocabulary stats:', err);
-          }
-        })(),
-        
-        // Load user stats (streak)
-        (async () => {
-          try {
-            await new Promise(resolve => setTimeout(resolve, 300)); // Small delay
-            const userStatsResult = await userAPI.getStats();
-            if (userStatsResult.success && userStatsResult.data.stats) {
-              setPracticeStreak(userStatsResult.data.stats.streak || 0);
-            }
-          } catch (err) {
-            console.error('Failed to load user stats:', err);
-          }
-        })(),
-      ]);
+      if (
+        conversationsResult.status === 'fulfilled' &&
+        conversationsResult.value.success &&
+        conversationsResult.value.data?.conversations
+      ) {
+        setRecentConversations(conversationsResult.value.data.conversations);
+      }
+
+      if (
+        vocabResult.status === 'fulfilled' &&
+        vocabResult.value.success &&
+        vocabResult.value.data?.stats?.[0]
+      ) {
+        setLearnedWordsCount(vocabResult.value.data.stats[0].totalWords || 0);
+      }
+
+      if (
+        userStatsResult.status === 'fulfilled' &&
+        userStatsResult.value.success &&
+        userStatsResult.value.data?.stats
+      ) {
+        setPracticeStreak(userStatsResult.value.data.stats.streak || 0);
+      }
     } catch (err) {
       console.error('Failed to load home screen data:', err);
     } finally {
       setLoading(false);
+      setSelectedLanguage((prev) => {
+        if (prev) return prev;
+        if (plan?.language && plan?.languageName) {
+          return {
+            id: plan.language,
+            name: plan.languageName,
+            flag: plan.flag || '🇳🇬',
+          };
+        }
+        return FALLBACK_HOME_LANGUAGE;
+      });
     }
   };
 
@@ -138,6 +140,7 @@ const HomeScreen = ({ navigation, route }) => {
       <LinearGradient
         colors={[COLORS.background, COLORS.backgroundLight]}
         style={StyleSheet.absoluteFill}
+        pointerEvents="none"
       />
 
       {/* Header Section */}
@@ -176,7 +179,7 @@ const HomeScreen = ({ navigation, route }) => {
           <TouchableOpacity
             style={styles.streakBanner}
             activeOpacity={0.8}
-            onPress={() => navigation.navigate('StreakStats')}
+            onPress={() => navigateRootStack(navigation, 'StreakStats')}
           >
             <Ionicons name="flame" size={28} color={COLORS.text} />
             <View style={styles.streakTextWrap}>
@@ -221,16 +224,15 @@ const HomeScreen = ({ navigation, route }) => {
         <TouchableOpacity
           style={styles.quickStartButton}
           onPress={() => {
-            if (!selectedLanguage) return;
+            const lang = selectedLanguage || FALLBACK_HOME_LANGUAGE;
             const planForRoleplay = plan || {
-              language: selectedLanguage.id,
-              languageName: selectedLanguage.name,
-              flag: selectedLanguage.flag,
+              language: lang.id,
+              languageName: lang.name,
+              flag: lang.flag,
             };
-            navigation.navigate('RoleplayCategories', { plan: planForRoleplay });
+            navigateRootStack(navigation, 'RoleplayCategories', { plan: planForRoleplay });
           }}
           activeOpacity={0.9}
-          disabled={!selectedLanguage}
         >
           <LinearGradient
             colors={COLORS.gradientOrange}
@@ -243,7 +245,54 @@ const HomeScreen = ({ navigation, route }) => {
               <View style={styles.quickStartText}>
                 <Text style={styles.quickStartTitle}>Start Roleplay</Text>
                 <Text style={styles.quickStartSubtitle}>
-                  {loading ? 'Loading...' : selectedLanguage ? `Pick a scenario & chat in ${selectedLanguage.name}` : 'Select a language to start'}
+                  {loading
+                    ? 'Loading...'
+                    : `Pick a scenario & chat in ${(selectedLanguage || FALLBACK_HOME_LANGUAGE).name}`}
+                </Text>
+              </View>
+              <Ionicons name="arrow-forward-circle" size={32} color={COLORS.text} />
+            </View>
+          </LinearGradient>
+        </TouchableOpacity>
+      </Animated.View>
+
+      {/* Start Tutor Mode – secondary CTA */}
+      <Animated.View
+        style={[
+          styles.quickStartCard,
+          {
+            opacity: fadeAnim,
+            transform: [{ translateY: slideAnim }],
+          },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.quickStartButton}
+          onPress={() => {
+            const lang = selectedLanguage || FALLBACK_HOME_LANGUAGE;
+            const planForTutor = plan || {
+              language: lang.id,
+              languageName: lang.name,
+              flag: lang.flag,
+            };
+            navigateRootStack(navigation, 'TutorCategories', { plan: planForTutor });
+          }}
+          activeOpacity={0.9}
+        >
+          <LinearGradient
+            colors={COLORS.gradientOrange}
+            style={styles.quickStartGradient}
+          >
+            <View style={styles.quickStartContent}>
+              <View style={styles.quickStartIcon}>
+                <Ionicons name="school" size={32} color={COLORS.text} />
+              </View>
+              <View style={styles.quickStartText}>
+                <Text style={styles.quickStartTitle}>Start Tutor Mode</Text>
+                <Text style={styles.quickStartSubtitle}>
+                  {loading
+                    ? 'Loading...'
+                    : `Structured lessons in ${(selectedLanguage || FALLBACK_HOME_LANGUAGE).name}`}
                 </Text>
               </View>
               <Ionicons name="arrow-forward-circle" size={32} color={COLORS.text} />
@@ -276,7 +325,7 @@ const HomeScreen = ({ navigation, route }) => {
 
           <TouchableOpacity
             style={styles.progressCard}
-            onPress={() => navigation.navigate('History')}
+            onPress={() => navigateRootStack(navigation, 'History')}
           >
             <LinearGradient
               colors={[COLORS.success + '30', COLORS.success + '10']}
@@ -309,7 +358,7 @@ const HomeScreen = ({ navigation, route }) => {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Recent Activity</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('History')}>
+          <TouchableOpacity onPress={() => navigateRootStack(navigation, 'History')}>
             <Text style={styles.seeAll}>See All</Text>
           </TouchableOpacity>
         </View>
@@ -355,7 +404,7 @@ const HomeScreen = ({ navigation, route }) => {
       <View style={styles.section}>
         <View style={styles.sectionHeader}>
           <Text style={styles.sectionTitle}>Explore Languages</Text>
-          <TouchableOpacity onPress={() => navigation.navigate('LanguageSelection')}>
+          <TouchableOpacity onPress={() => navigateRootStack(navigation, 'LanguageSelection')}>
             <Text style={styles.seeAll}>Change</Text>
           </TouchableOpacity>
         </View>

@@ -51,6 +51,11 @@ const conversationSchema = new mongoose.Schema({
     type: String,
     default: 'New Conversation',
   },
+  /** Roleplay scenario id (e.g. shopping, food); null = open practice / tutor-style chat */
+  conversationType: {
+    type: String,
+    default: null,
+  },
   messages: [messageSchema],
   
   // Conversation metadata

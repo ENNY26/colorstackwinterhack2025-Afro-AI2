@@ -12,6 +12,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { FALLBACK_AI_PERSONALITIES } from '../constants/mockData';
 import { languagesAPI } from '../services';
 
 const { width } = Dimensions.get('window');
@@ -35,16 +36,17 @@ const PersonalitySelectionScreen = ({ navigation, route }) => {
       setLoading(true);
       setError(null);
       const result = await languagesAPI.getPersonalities();
-      
-      if (result.success && result.data.personalities) {
+
+      if (result.success && result.data?.personalities?.length) {
         setPersonalities(result.data.personalities);
       } else {
-        setError('Failed to load personalities');
+        setPersonalities(FALLBACK_AI_PERSONALITIES);
+        setError(null);
       }
     } catch (err) {
-      console.error('Failed to load personalities:', err);
-      setError('Failed to load personalities. Please try again.');
-      setPersonalities([]);
+      console.warn('Personalities API failed, using offline list:', err?.message || err);
+      setPersonalities(FALLBACK_AI_PERSONALITIES);
+      setError(null);
     } finally {
       setLoading(false);
     }

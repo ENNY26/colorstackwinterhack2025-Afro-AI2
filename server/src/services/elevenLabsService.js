@@ -5,133 +5,177 @@ const { v4: uuidv4 } = require('uuid');
 
 const ELEVENLABS_API_URL = 'https://api.elevenlabs.io/v1';
 
-// Default voice settings
-// NOTE: Lowering `stability` and `similarity_boost` a bit can reduce robotic, "locked" speech
-// and allow the model more natural variation. `style` increases expressiveness.
-const DEFAULT_VOICE_SETTINGS = {
-  stability: 0.45,
-  similarity_boost: 0.7,
-  style: 0.25,
-  use_speaker_boost: true,
-};
-
-// Language-specific voice settings optimized for African languages
-// These settings improve pronunciation quality for tonal languages like Yoruba
-const LANGUAGE_VOICE_SETTINGS = {
-  yoruba: {
-    stability: 0.55,
-    similarity_boost: 0.8,
-    style: 0.35,
-    use_speaker_boost: true,
-  },
-  igbo: {
-    stability: 0.55,
-    similarity_boost: 0.8,
-    style: 0.35,
-    use_speaker_boost: true,
-  },
-  hausa: {
-    stability: 0.5,
-    similarity_boost: 0.75,
-    style: 0.3,
-    use_speaker_boost: true,
-  },
-  swahili: {
-    stability: 0.5,
-    similarity_boost: 0.75,
-    style: 0.3,
-    use_speaker_boost: true,
-  },
-  zulu: {
-    stability: 0.55,
-    similarity_boost: 0.8,
-    style: 0.35,
-    use_speaker_boost: true,
-  },
-  xhosa: {
-    stability: 0.55,
-    similarity_boost: 0.8,
-    style: 0.35,
-    use_speaker_boost: true,
-  },
-  amharic: {
-    stability: 0.55,
-    similarity_boost: 0.8,
-    style: 0.35,
-    use_speaker_boost: true,
-  },
-  akan: {
-    stability: 0.5,
-    similarity_boost: 0.75,
-    style: 0.3,
-    use_speaker_boost: true,
-  },
-};
-
-// Voice speed multipliers
+// Voice speed multipliers (applied on top of ELEVENLABS_SPEED / voice_settings.speed)
 const VOICE_SPEEDS = {
   slow: 0.75,
   normal: 1.0,
   fast: 1.25,
 };
 
-/**
- * Normalize text for better pronunciation (especially for tonal languages)
- * This helps the TTS engine better understand Yoruba tonal marks and accents
- */
-const normalizeTextForPronunciation = (text, language) => {
-  if (!text) return text;
-  
-  // For Yoruba specifically, ensure proper spacing and preserve tonal marks
-  if (language === 'yoruba') {
-    // Remove extra spaces but preserve intentional spacing
-    let normalized = text.trim().replace(/\s+/g, ' ');
-    // Ensure tonal marks are preserved (ẹ, ọ, ṣ, etc.)
-    // Add slight pauses after punctuation for better intonation
-    normalized = normalized.replace(/([.!?])\s*/g, '$1 ');
-    return normalized;
-  }
-  
-  // General normalization for other languages
-  return text.trim().replace(/\s+/g, ' ');
+const parseEnvFloat = (key, defaultValue) => {
+  const raw = process.env[key];
+  if (raw === undefined || raw === '') return defaultValue;
+  const value = parseFloat(raw);
+  return Number.isFinite(value) ? value : defaultValue;
+};
+
+const parseEnvBool = (key, defaultValue) => {
+  const raw = process.env[key];
+  if (raw === undefined || raw === '') return defaultValue;
+  return ['true', '1', 'yes', 'on'].includes(String(raw).toLowerCase());
 };
 
 /**
- * Get optimized voice settings for a specific language
+ * Voice settings from .env — tweak these without changing code.
+ * ELEVENLABS_STABILITY, ELEVENLABS_SIMILARITY, ELEVENLABS_STYLE,
+ * ELEVENLABS_SPEED, ELEVENLABS_SPEAKER_BOOST
  */
-const getVoiceSettingsForLanguage = (language, customSettings = {}) => {
-  // Start with default settings
-  let settings = { ...DEFAULT_VOICE_SETTINGS };
+const getEnvVoiceSettings = () => ({
+  stability: parseEnvFloat('ELEVENLABS_STABILITY', 0.45),
+  similarity_boost: parseEnvFloat('ELEVENLABS_SIMILARITY', 0.75),
+  style: parseEnvFloat('ELEVENLABS_STYLE', 0.0),
+  speed: parseEnvFloat('ELEVENLABS_SPEED', 1.08),
+  use_speaker_boost: parseEnvBool('ELEVENLABS_SPEAKER_BOOST', true),
+});
 
-  // Apply language-specific optimizations if available
-  if (language && LANGUAGE_VOICE_SETTINGS[language.toLowerCase()]) {
+// Optional per-language overrides (off by default; set ELEVENLABS_USE_LANGUAGE_PRESETS=true)
+const LANGUAGE_VOICE_SETTINGS = {
+  yoruba: {
+    stability: 0.45,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.08,
+    use_speaker_boost: true,
+  },
+  igbo: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.05,
+    use_speaker_boost: true,
+  },
+  hausa: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.05,
+    use_speaker_boost: true,
+  },
+  swahili: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.05,
+    use_speaker_boost: true,
+  },
+  zulu: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.05,
+    use_speaker_boost: true,
+  },
+  xhosa: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.05,
+    use_speaker_boost: true,
+  },
+  amharic: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.05,
+    use_speaker_boost: true,
+  },
+  akan: {
+    stability: 0.5,
+    similarity_boost: 0.75,
+    style: 0.0,
+    speed: 1.05,
+    use_speaker_boost: true,
+  },
+};
+
+/**
+ * Light text cleanup — preserves Yoruba tone marks (ẹ, ọ, ṣ, grave/acute accents).
+ * Does not romanize or strip diacritics.
+ */
+const normalizeTextForPronunciation = (text, language) => {
+  if (!text) return text;
+
+  let normalized = text.trim().replace(/\s+/g, ' ');
+  normalized = normalized.replace(/([.!?])\s*/g, '$1 ');
+
+  if (language === 'yoruba') {
+    return normalized;
+  }
+
+  return normalized;
+};
+
+/**
+ * Build voice_settings for an ElevenLabs request.
+ * Priority: .env defaults → optional language preset → per-call overrides → speed tier multiplier.
+ * @param {string} [speedTier] - 'slow' | 'normal' | 'fast' (multiplies voice_settings.speed)
+ */
+const getVoiceSettingsForLanguage = (language, customSettings = {}, speedTier = 'normal') => {
+  let settings = { ...getEnvVoiceSettings() };
+
+  const useLanguagePresets = parseEnvBool('ELEVENLABS_USE_LANGUAGE_PRESETS', false);
+  if (useLanguagePresets && language && LANGUAGE_VOICE_SETTINGS[language.toLowerCase()]) {
     settings = {
       ...settings,
       ...LANGUAGE_VOICE_SETTINGS[language.toLowerCase()],
     };
   }
 
-  // If caller requested a "naturalize" mode, relax stability/similarity for more natural speech
-  if (customSettings && customSettings.naturalize) {
-    settings.stability = Math.max(0.25, settings.stability - 0.15);
-    settings.similarity_boost = Math.max(0.5, settings.similarity_boost - 0.15);
-    settings.style = Math.min(0.6, settings.style + 0.15);
-    // Remove the helper flag so it doesn't get sent to the API
-    delete customSettings.naturalize;
-  }
-
-  // Apply any custom settings (highest priority)
   settings = { ...settings, ...customSettings };
 
+  if (speedTier && speedTier !== 'normal' && VOICE_SPEEDS[speedTier]) {
+    settings.speed = (settings.speed ?? 1.0) * VOICE_SPEEDS[speedTier];
+  }
+
   return settings;
+};
+
+const logVoiceSettings = (context, voiceSettings, extra = {}) => {
+  console.log('[ElevenLabs TTS] voice_settings used:', {
+    context,
+    ...voiceSettings,
+    ...extra,
+  });
+};
+
+/**
+ * Resolve voice ID for a given language, with optional override.
+ * Priority:
+ *   1) options.voiceId
+ *   2) language-specific env (e.g. ELEVENLABS_YORUBA_VOICE_ID)
+ *   3) default ELEVENLABS_VOICE_ID
+ */
+const getVoiceIdForLanguage = (language, overrideVoiceId) => {
+  if (overrideVoiceId) return overrideVoiceId;
+
+  const lang = language ? language.toLowerCase() : null;
+
+  if (lang === 'yoruba' && process.env.ELEVENLABS_YORUBA_VOICE_ID) {
+    return process.env.ELEVENLABS_YORUBA_VOICE_ID;
+  }
+  if (lang === 'swahili' && process.env.ELEVENLABS_SWAHILI_VOICE_ID) {
+    return process.env.ELEVENLABS_SWAHILI_VOICE_ID;
+  }
+
+  return process.env.ELEVENLABS_VOICE_ID;
 };
 
 /**
  * Convert text to speech using ElevenLabs API
  * @param {string} text - Text to convert to speech
  * @param {Object} options - TTS options
- * @param {string} options.language - Language code (e.g., 'yoruba') for optimized settings
- * @param {string} options.speed - Speed: 'slow', 'normal', or 'fast'
+ * @param {string} options.language - Language code (e.g., 'yoruba')
+ * @param {string} options.speed - Speed: 'slow', 'normal', or 'fast' (multiplies ELEVENLABS_SPEED)
  * @param {string} options.voiceId - Override default voice ID
  * @param {string} options.modelId - Override default model ID
  * @param {Object} options.voiceSettings - Custom voice settings to override defaults
@@ -140,31 +184,33 @@ const getVoiceSettingsForLanguage = (language, customSettings = {}) => {
 const textToSpeech = async (text, options = {}) => {
   try {
     const apiKey = process.env.ELEVENLABS_API_KEY;
-    const voiceId = options.voiceId || process.env.ELEVENLABS_VOICE_ID;
-    const speed = VOICE_SPEEDS[options.speed] || 1.0;
-    const modelId = options.modelId || 'eleven_multilingual_v2';
+    const modelId = options.modelId || process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
     const language = options.language || null;
+    const voiceId = getVoiceIdForLanguage(language, options.voiceId);
+    const speedOption = options.speed || 'normal';
 
     if (!apiKey || apiKey.includes('your-')) {
       throw new Error('ELEVENLABS_API_KEY not configured in .env file');
     }
 
     if (!voiceId || voiceId.includes('your-')) {
-      throw new Error('ELEVENLABS_VOICE_ID not configured in .env file');
+      throw new Error('ELEVENLABS_VOICE_ID (or language-specific voice env) not configured in .env file');
     }
 
-    // Normalize text for better pronunciation
     const normalizedText = normalizeTextForPronunciation(text, language);
-    
-    // Get optimized voice settings for the language
-    // Apply a default `naturalize` tweak for supported African languages to reduce roboticness
+
     const voiceSettings = getVoiceSettingsForLanguage(
       language,
-      {
-        ...(options.voiceSettings || {}),
-        ...(language ? { naturalize: true } : {}),
-      }
+      options.voiceSettings || {},
+      speedOption
     );
+
+    logVoiceSettings('textToSpeech', voiceSettings, {
+      language,
+      voiceId,
+      modelId,
+      textLength: normalizedText?.length,
+    });
 
     const response = await axios.post(
       `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`,
@@ -175,7 +221,7 @@ const textToSpeech = async (text, options = {}) => {
       },
       {
         headers: {
-          'Accept': 'audio/mpeg',
+          Accept: 'audio/mpeg',
           'Content-Type': 'application/json',
           'xi-api-key': apiKey,
         },
@@ -185,7 +231,6 @@ const textToSpeech = async (text, options = {}) => {
 
     const audioBuffer = Buffer.from(response.data);
 
-    // Save audio file
     const audioDir = process.env.AUDIO_UPLOAD_DIR || './uploads/audio';
     const filename = `tts_${uuidv4()}.mp3`;
     const filePath = path.join(audioDir, filename);
@@ -200,19 +245,18 @@ const textToSpeech = async (text, options = {}) => {
       audioUrl: `/uploads/audio/${filename}`,
       audioBuffer,
       filePath,
+      voiceSettings,
     };
   } catch (error) {
-    // Parse error response if it's a Buffer
     let errorMessage = error.message;
     let errorDetails = null;
-    
+
     if (error.response?.data) {
       try {
-        // If it's a Buffer, convert to string first
-        const errorData = Buffer.isBuffer(error.response.data) 
+        const errorData = Buffer.isBuffer(error.response.data)
           ? JSON.parse(error.response.data.toString())
           : error.response.data;
-        
+
         if (errorData.detail?.message) {
           errorMessage = errorData.detail.message;
         } else if (errorData.message) {
@@ -220,23 +264,20 @@ const textToSpeech = async (text, options = {}) => {
         } else if (errorData.detail) {
           errorMessage = JSON.stringify(errorData.detail);
         }
-        
+
         errorDetails = errorData;
       } catch (parseErr) {
-        // If parsing fails, try to convert buffer to string
         if (Buffer.isBuffer(error.response.data)) {
           errorMessage = error.response.data.toString('utf-8');
         }
       }
     }
-    
-    // 402 = free tier cannot use library/premium voices — app will use device TTS
+
     if (error.response?.status === 402) {
       console.warn('ElevenLabs: free tier cannot use library voices. Using device TTS for playback.');
       throw new Error(`ElevenLabs free tier limit: ${errorMessage}`);
     }
 
-    // Log other errors in full
     console.error('ElevenLabs TTS error:', {
       status: error.response?.status,
       statusText: error.response?.statusText,
@@ -313,21 +354,24 @@ const getSubscriptionInfo = async () => {
  */
 const textToSpeechStream = async (text, options = {}) => {
   try {
-    const voiceId = options.voiceId || process.env.ELEVENLABS_VOICE_ID;
-    const modelId = options.modelId || 'eleven_multilingual_v2';
     const language = options.language || null;
+    const voiceId = getVoiceIdForLanguage(language, options.voiceId);
+    const modelId = options.modelId || process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+    const speedOption = options.speed || 'normal';
 
-    // Normalize text for better pronunciation
     const normalizedText = normalizeTextForPronunciation(text, language);
-    
-    // Get optimized voice settings for the language
+
     const voiceSettings = getVoiceSettingsForLanguage(
       language,
-      {
-        ...(options.voiceSettings || {}),
-        ...(language ? { naturalize: true } : {}),
-      }
+      options.voiceSettings || {},
+      speedOption
     );
+
+    logVoiceSettings('textToSpeechStream', voiceSettings, {
+      language,
+      voiceId,
+      modelId,
+    });
 
     const response = await axios.post(
       `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}/stream`,
@@ -338,7 +382,7 @@ const textToSpeechStream = async (text, options = {}) => {
       },
       {
         headers: {
-          'Accept': 'audio/mpeg',
+          Accept: 'audio/mpeg',
           'Content-Type': 'application/json',
           'xi-api-key': process.env.ELEVENLABS_API_KEY,
         },
@@ -360,21 +404,19 @@ const textToSpeechStream = async (text, options = {}) => {
  * @returns {Promise<{audioUrl: string}>}
  */
 const generatePronunciation = async (word, language) => {
-  // For better pronunciation of single words, add slight pauses
-  // This helps especially for tonal languages where each syllable matters
   const pronounceText = `${word}.`;
-  
-  // Get optimized settings for the language, with extra emphasis for word pronunciation
-  const baseSettings = getVoiceSettingsForLanguage(language);
+
+  const baseSettings = getVoiceSettingsForLanguage(language, {}, 'normal');
   const pronunciationSettings = {
     ...baseSettings,
-    stability: Math.min(0.75, baseSettings.stability + 0.1), // Even higher stability for word clarity
-    similarity_boost: Math.min(0.9, baseSettings.similarity_boost + 0.05), // Higher similarity for accuracy
+    stability: Math.min(0.75, baseSettings.stability + 0.1),
+    similarity_boost: Math.min(0.9, baseSettings.similarity_boost + 0.05),
   };
-  
+
   return textToSpeech(pronounceText, {
-    language: language,
+    language,
     voiceSettings: pronunciationSettings,
+    speed: 'normal',
   });
 };
 
@@ -384,5 +426,6 @@ module.exports = {
   getAvailableVoices,
   getSubscriptionInfo,
   generatePronunciation,
+  getEnvVoiceSettings,
+  getVoiceSettingsForLanguage,
 };
-

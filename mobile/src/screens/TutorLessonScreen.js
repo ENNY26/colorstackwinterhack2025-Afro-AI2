@@ -17,19 +17,6 @@ import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/colors'
 import { audioAPI, authAPI, API_BASE } from '../services';
 import { getPhrasesForCategory } from '../constants/tutorPhrases';
 
-function evaluatePronunciation(expected, actual) {
-  if (!actual) return 0;
-  const a = expected.toLowerCase().replace(/[^\w\s]/g, '');
-  const b = actual.toLowerCase().replace(/[^\w\s]/g, '');
-  const expectedWords = a.split(/\s+/).filter(Boolean);
-  const actualWords = b.split(/\s+/).filter(Boolean);
-  let matches = 0;
-  expectedWords.forEach((w) => {
-    if (actualWords.some((aw) => aw.includes(w) || w.includes(aw))) matches++;
-  });
-  return matches / Math.max(expectedWords.length, 1);
-}
-
 // Use only AI-generated plan lessons when plan has lessons; no dummy/static data then
 function getPhrases(plan, langId, category) {
   const lessons = plan?.lessons || [];
@@ -60,6 +47,7 @@ const TutorLessonScreen = ({ navigation, route }) => {
   const [processing, setProcessing] = useState(false);
   const [lastFeedback, setLastFeedback] = useState(null);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const activeSoundRef = useRef(null);
 
   const currentPhrase = stepIndex >= 0 && stepIndex < phrases.length ? phrases[stepIndex] : null;
   const isWelcome = stepIndex === -1;
@@ -67,11 +55,29 @@ const TutorLessonScreen = ({ navigation, route }) => {
   const hasNoContent = phrases.length === 0;
 
   // Play phrase using backend TTS (ElevenLabs) for natural pronunciation; fallback to device TTS
-  const playPhraseWithTTS = async (text) => {
+  const playPhraseWithTTS = async (text, ttsLanguage = langId, { showLoading = true } = {}) => {
     if (!text) return;
-    setTtsLoading(true);
+    // If expo-speech is currently speaking (from any previous action), stop it
+    // to prevent overlap with ElevenLabs audio.
     try {
-      const result = await audioAPI.synthesize(text, 'slow', null, langId);
+      Speech.stop();
+    } catch (e) {
+      // ignore
+    }
+
+    if (showLoading) setTtsLoading(true);
+    try {
+      // Stop any currently playing ElevenLabs sound to avoid overlap.
+      try {
+        if (activeSoundRef.current) {
+          await activeSoundRef.current.unloadAsync();
+          activeSoundRef.current = null;
+        }
+      } catch (e) {
+        // ignore
+      }
+
+      const result = await audioAPI.synthesize(text, 'slow', null, ttsLanguage);
       const audioUrl = result?.data?.audioUrl;
       if (audioUrl) {
         const fullUrl = audioUrl.startsWith('http') ? audioUrl : `${API_BASE}${audioUrl.startsWith('/') ? '' : '/'}${audioUrl}`;
@@ -79,30 +85,44 @@ const TutorLessonScreen = ({ navigation, route }) => {
           { uri: fullUrl },
           { shouldPlay: true, volume: 1.0 }
         );
+        activeSoundRef.current = sound;
         sound.setOnPlaybackStatusUpdate((status) => {
-          if (status.didJustFinish) sound.unloadAsync().catch(() => {});
+          if (status.didJustFinish) {
+            sound.unloadAsync().catch(() => {});
+            if (activeSoundRef.current === sound) activeSoundRef.current = null;
+          }
         });
       } else {
         throw new Error('No audio URL');
       }
     } catch (err) {
-      console.warn('TTS API failed, using device speech:', err?.message);
-      Speech.speak(text, { language: langId === 'yoruba' ? 'yo' : langId === 'swahili' ? 'sw' : 'en', rate: 0.85 });
+      // Disable device robotic speech fallback in tutor mode to prevent overlap.
+      console.warn('TTS API failed; skipping device speech to avoid robotic overlap:', err?.message);
     } finally {
-      setTtsLoading(false);
+      if (showLoading) setTtsLoading(false);
     }
+  };
+
+  /** Voice-only tutor feedback after pronunciation check (English TTS). No on-screen score/transcript. */
+  const speakTutorOutcome = (score) => {
+    const s = typeof score === 'number' ? score : 0;
+    const line =
+      s > 0.45
+        ? "Good job! Now let's move on."
+        : "Let's try that again.";
+    return playPhraseWithTTS(line, 'en', { showLoading: false });
   };
 
   const playWelcome = () => {
     const welcome = `Welcome to your personalized ${langName} ${category} lesson.`;
-    Speech.speak(welcome, { language: 'en', rate: 0.9 });
+    playPhraseWithTTS(welcome, 'en', { showLoading: false }).catch(() => {});
   };
 
   const playCurrentInstruction = async () => {
     if (!currentPhrase) return;
     const instruction = `In ${langName} we say "${currentPhrase.native}" as in ${currentPhrase.english}. Now try saying "${currentPhrase.native}".`;
-    Speech.speak(instruction, { language: 'en', rate: 0.9 });
-    setTimeout(() => playPhraseWithTTS(currentPhrase.native), 1500);
+    playPhraseWithTTS(instruction, 'en', { showLoading: false }).catch(() => {});
+    setTimeout(() => playPhraseWithTTS(currentPhrase.native, langId), 1600);
   };
 
   const startLesson = () => {
@@ -110,8 +130,8 @@ const TutorLessonScreen = ({ navigation, route }) => {
     if (phrases.length > 0) {
       const first = phrases[0];
       const instruction = `In ${langName} we say "${first.native}" as in ${first.english}. Now try saying "${first.native}".`;
-      Speech.speak(instruction, { language: 'en', rate: 0.9 });
-      setTimeout(() => playPhraseWithTTS(first.native), 2000);
+      playPhraseWithTTS(instruction, 'en', { showLoading: false }).catch(() => {});
+      setTimeout(() => playPhraseWithTTS(first.native, langId), 2100);
     }
   };
 
@@ -137,11 +157,26 @@ const TutorLessonScreen = ({ navigation, route }) => {
   const stopRecordingAndEvaluate = async () => {
     if (!recording || !currentPhrase) return;
     try {
-      const uri = recording.getURI();
       const status = await recording.getStatusAsync();
-      if (status.isRecording) await recording.stopAndUnloadAsync();
+      // Try URI before stop (some platforms expose it only while recording)
+      let uri = recording.getURI();
+      if (status.isRecording) {
+        await recording.stopAndUnloadAsync();
+      }
+      // After finalize, many builds expose the file here; use whichever worked
+      if (!uri) {
+        uri = recording.getURI();
+      }
       setRecording(null);
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+
+      if (!uri) {
+        Alert.alert(
+          'Recording error',
+          'Could not read the audio file. Try again, or use the iOS/Android app if you are on web.'
+        );
+        return;
+      }
 
       setProcessing(true);
       try {
@@ -152,21 +187,37 @@ const TutorLessonScreen = ({ navigation, route }) => {
 
       const fileType = Platform.OS === 'web' ? 'audio/webm' : 'audio/m4a';
       const fileName = Platform.OS === 'web' ? 'recording.webm' : 'recording.m4a';
-      const result = await audioAPI.transcribe(
+
+      // Pronunciation scoring via Node → FastAPI practice-round (Whisper + similarity + encouragement)
+      const result = await audioAPI.practiceRound(
         { uri, type: fileType, name: fileName },
-        langId
+        currentPhrase.native,
+        'tutor'
       );
 
-      if (result.success) {
-        const userText = (result.data?.text || '').trim();
-        const score = evaluatePronunciation(currentPhrase.native, userText);
-        setLastFeedback({ userText, score, expected: currentPhrase.native });
+      if (result.success && result.data) {
+        const d = result.data;
+        const score = typeof d.score === 'number' ? d.score : 0;
+        const passed = score > 0.45;
+        // Only show Next after a pass; fail is voice-only (retry by recording again).
+        setLastFeedback(passed ? { error: false, passed: true } : null);
+        speakTutorOutcome(score).catch(() => {});
       } else {
-        setLastFeedback({ userText: null, score: 0, expected: currentPhrase.native, error: true });
+        setLastFeedback({
+          userText: null,
+          score: 0,
+          expected: currentPhrase.native,
+          error: true,
+          message: result.message || 'Could not score pronunciation.',
+        });
       }
     } catch (err) {
       console.error('Evaluation error:', err);
-      setLastFeedback({ userText: null, score: 0, expected: currentPhrase.native, error: true });
+      const msg =
+        err.response?.data?.message ||
+        err.message ||
+        'Could not reach pronunciation service. Is the speech API running?';
+      setLastFeedback({ userText: null, score: 0, expected: currentPhrase.native, error: true, message: msg });
     } finally {
       setProcessing(false);
     }
@@ -175,7 +226,7 @@ const TutorLessonScreen = ({ navigation, route }) => {
   const goToNextPhrase = () => {
     setLastFeedback(null);
     if (stepIndex + 1 >= phrases.length) {
-      Speech.speak('Great job! You completed this lesson.', { language: 'en' });
+      playPhraseWithTTS('Great job! You completed this lesson.', 'en', { showLoading: false }).catch(() => {});
       setStepIndex(phrases.length); // mark complete
       return;
     }
@@ -184,8 +235,8 @@ const TutorLessonScreen = ({ navigation, route }) => {
     const next = phrases[nextIndex];
     setTimeout(() => {
       const instruction = `In ${langName} we say "${next.native}" as in ${next.english}. Now try saying "${next.native}".`;
-      Speech.speak(instruction, { language: 'en', rate: 0.9 });
-      setTimeout(() => playPhraseWithTTS(next.native), 2000);
+      playPhraseWithTTS(instruction, 'en', { showLoading: false }).catch(() => {});
+      setTimeout(() => playPhraseWithTTS(next.native, langId), 2100);
     }, 400);
   };
 
@@ -285,19 +336,15 @@ const TutorLessonScreen = ({ navigation, route }) => {
               </TouchableOpacity>
             )}
 
-            {lastFeedback && (
+            {lastFeedback?.error && (
               <View style={styles.feedbackCard}>
-                {lastFeedback.error ? (
-                  <Text style={styles.feedbackError}>Could not transcribe. Try again.</Text>
-                ) : (
-                  <>
-                    <Text style={styles.feedbackLabel}>You said:</Text>
-                    <Text style={styles.feedbackText}>{lastFeedback.userText || '(no speech detected)'}</Text>
-                    <Text style={styles.feedbackScore}>
-                      Score: {Math.round((lastFeedback.score || 0) * 100)}%
-                    </Text>
-                  </>
-                )}
+                <Text style={styles.feedbackError}>
+                  {lastFeedback.message || 'Could not score pronunciation. Try again.'}
+                </Text>
+              </View>
+            )}
+            {lastFeedback?.passed && (
+              <View style={styles.feedbackCard}>
                 <TouchableOpacity style={styles.nextButton} onPress={goToNextPhrase}>
                   <Text style={styles.nextButtonText}>
                     {stepIndex + 1 >= phrases.length ? 'Finish lesson' : 'Next phrase'}
@@ -423,10 +470,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
   },
-  feedbackLabel: { fontSize: FONT_SIZES.sm, color: COLORS.textMuted, marginBottom: SPACING.xs },
-  feedbackText: { fontSize: FONT_SIZES.md, color: COLORS.text, marginBottom: SPACING.sm },
-  feedbackScore: { fontSize: FONT_SIZES.lg, fontWeight: 'bold', color: COLORS.primary, marginBottom: SPACING.md },
-  feedbackError: { color: COLORS.error, marginBottom: SPACING.md },
+  feedbackError: { color: COLORS.error },
   nextButton: {
     flexDirection: 'row',
     alignItems: 'center',

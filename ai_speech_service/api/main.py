@@ -3,8 +3,10 @@ AfroLingo AI Speech Service — FastAPI app for transcription, pronunciation sco
 
 Endpoints:
   - POST /transcribe          — Upload audio, get recognized text (Whisper).
-  - POST /score-pronunciation — Upload audio + expected sentence, get score 0–100.
+  - POST /score-pronunciation — Upload audio + expected sentence, get score 0–1 and feedback.
   - POST /generate-audio      — Send JSON {"text": "..."}, get generated audio file.
+  - POST /practice-round      — Transcribe + pronunciation score + fixed learning-loop message.
+  - POST /roleplay-session    — Yoruba-only roleplay turn (OpenAI JSON).
 
 Run from project root (ai_speech_service/):
     uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
@@ -18,6 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.routes import transcribe as transcribe_router
 from api.routes import pronunciation as pronunciation_router
+from api.routes import practice_round as practice_round_router
+from api.routes import roleplay_session as roleplay_session_router
 from api.routes import tts as tts_router
 
 # Configure logging: level INFO, log request processing time and key results.
@@ -56,6 +60,8 @@ async def log_request_time(request: Request, call_next):
 # Mount route modules under the paths expected by the MERN app.
 app.include_router(transcribe_router.router)
 app.include_router(pronunciation_router.router)
+app.include_router(practice_round_router.router)
+app.include_router(roleplay_session_router.router)
 app.include_router(tts_router.router)
 
 

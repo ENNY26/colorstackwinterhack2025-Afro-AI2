@@ -444,4 +444,42 @@ export const ONBOARDING_SLIDES = [
   },
 ];
 
+/** Same IDs/copy as server `AI_PERSONALITIES` — used when the personalities API is unreachable (timeout, wrong API URL, server down). */
+export const FALLBACK_AI_PERSONALITIES = [
+  {
+    id: 'quirky',
+    name: 'Quirky & Fun',
+    emoji: '🎉',
+    description: 'Learning with jokes and playful banter',
+    color: '#E91E63',
+  },
+  {
+    id: 'professional',
+    name: 'Serious & Professional',
+    emoji: '📚',
+    description: 'Structured lessons with clear explanations',
+    color: '#3F51B5',
+  },
+  {
+    id: 'friendly',
+    name: 'Friendly & Casual',
+    emoji: '😊',
+    description: 'Like chatting with a supportive friend',
+    color: '#FF6B35',
+  },
+  {
+    id: 'patient',
+    name: 'Patient & Encouraging',
+    emoji: '🌟',
+    description: 'Gentle pace with lots of positive reinforcement',
+    color: '#4CAF50',
+  },
+  {
+    id: 'humorous',
+    name: 'Humorous',
+    emoji: '😄',
+    description: 'Comedy-filled learning adventure',
+    color: '#FFC107',
+  },
+];
 

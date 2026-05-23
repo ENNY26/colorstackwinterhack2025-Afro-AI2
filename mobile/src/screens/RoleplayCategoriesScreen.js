@@ -29,6 +29,16 @@ const RoleplayCategoriesScreen = ({ navigation, route }) => {
   const sessionMinutes = plan?.dailyGoal || 10;
 
   const handleChoose = (category) => {
+    if (category.hasScenarios) {
+      navigation.navigate('RoleplayScenarios', {
+        plan,
+        category,
+        language,
+        personality,
+        sessionMinutes,
+      });
+      return;
+    }
     navigation.replace('MainTabs', {
       screen: 'Conversation',
       params: { language, personality, conversationType: category.id, sessionMinutes },
@@ -53,14 +63,24 @@ const RoleplayCategoriesScreen = ({ navigation, route }) => {
   return (
     <View style={styles.container}>
       <LinearGradient colors={[COLORS.background, COLORS.backgroundLight]} style={StyleSheet.absoluteFill} />
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={24} color={COLORS.text} />
-        </TouchableOpacity>
-        <View style={styles.headerContent}>
-          <Text style={styles.title}>Roleplay Mode</Text>
-          <Text style={styles.subtitle}>Pick a scenario to practice {langName} with the AI</Text>
+      <View style={styles.headerBlock}>
+        <View style={styles.header}>
+          <TouchableOpacity style={styles.backButton} onPress={() => navigation.goBack()}>
+            <Ionicons name="arrow-back" size={24} color={COLORS.text} />
+          </TouchableOpacity>
+          <View style={styles.headerContent}>
+            <Text style={styles.title}>Roleplay Mode</Text>
+            <Text style={styles.subtitle}>Pick a scenario to practice {langName} with the AI</Text>
+          </View>
         </View>
+        <TouchableOpacity
+          style={styles.viewSummariesBar}
+          onPress={() => navigation.navigate('RoleplayHistory')}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="list-outline" size={22} color={COLORS.primary} style={styles.viewSummariesIcon} />
+          <Text style={styles.viewSummariesBarText}>View summaries</Text>
+        </TouchableOpacity>
       </View>
       <FlatList
         data={ROLEPLAY_CATEGORIES}
@@ -75,12 +95,10 @@ const RoleplayCategoriesScreen = ({ navigation, route }) => {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
+  headerBlock: { paddingTop: 56, paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingTop: 56,
-    paddingHorizontal: SPACING.lg,
-    paddingBottom: SPACING.md,
   },
   backButton: {
     width: 44,
@@ -91,7 +109,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: SPACING.md,
   },
-  headerContent: { flex: 1 },
+  headerContent: { flex: 1, paddingRight: SPACING.xs },
+  viewSummariesBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: SPACING.md,
+    paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.lg,
+    borderRadius: BORDER_RADIUS.lg,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.surface,
+  },
+  viewSummariesIcon: { marginRight: 10 },
+  viewSummariesBarText: { fontSize: FONT_SIZES.lg, fontWeight: '800', color: COLORS.primary },
   title: { fontSize: FONT_SIZES.xxl, fontWeight: 'bold', color: COLORS.text, marginBottom: SPACING.xs },
   subtitle: { fontSize: FONT_SIZES.md, color: COLORS.textSecondary },
   list: { paddingHorizontal: SPACING.lg, paddingBottom: SPACING.xxl },

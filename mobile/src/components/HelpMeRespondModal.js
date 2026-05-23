@@ -215,7 +215,8 @@ const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses, lan
           ]}
         >
           <TouchableOpacity
-            style={[StyleSheet.absoluteFill, { pointerEvents: 'auto' }]}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="auto"
             onPress={onClose}
             activeOpacity={1}
           />

@@ -131,7 +131,14 @@ const CONVERSATION_TYPES = {
   travel: 'Travel and directions',
   shopping: 'Shopping and bargaining',
   culture: 'Cultural expressions and proverbs',
-  making_friends: 'Making friends and small talk',
+  // Making friends — use sub-types for specific scenes; "making_friends" is the default (AI may pick a natural context)
+  making_friends: 'Making friends: AI chooses a natural first meeting or small-talk situation (default)',
+  making_friends_park:
+    'Making friends: you sit on a park bench; someone friendly sits nearby and you start a light conversation in passing',
+  making_friends_class:
+    'Making friends: you are new and want to ask a classmate what the class and professor are like, and how they are doing',
+  making_friends_study:
+    'Making friends: you introduce yourself at a study group or new club and exchange names and a bit about your interests',
   directions: 'Asking for and giving directions',
   emergency: 'Emergency and asking for help',
 };

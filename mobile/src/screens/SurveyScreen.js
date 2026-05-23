@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Alert,
   ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -39,10 +38,22 @@ const SurveyScreen = ({ navigation, route }) => {
     return plan;
   };
 
+  const mergePlanFields = (plan) => {
+    plan.languageName = plan.languageName || language?.name || 'Yoruba';
+    plan.language = plan.language || language?.id || 'yoruba';
+    plan.level = plan.level ?? level;
+    plan.reason = plan.reason ?? reason;
+    plan.focusArea = plan.focusArea ?? focusArea;
+    plan.dailyGoal = plan.dailyGoal ?? plan.dailyMinutes ?? Number(dailyGoal);
+    plan.personality = plan.personality ?? personality?.id ?? null;
+    if (!Array.isArray(plan.lessons)) plan.lessons = [];
+    return plan;
+  };
+
   const handleSubmit = () => {
     (async () => {
+      setLoading(true);
       try {
-        // ensure auth token exists (creates guest if needed in dev)
         await authAPI.ensureAuthenticated();
 
         const payload = {
@@ -53,21 +64,20 @@ const SurveyScreen = ({ navigation, route }) => {
           focusArea,
         };
 
-        setLoading(true);
-        const resp = await api.post('/plans', payload);
-        let plan = resp.data?.data?.plan || resp.data?.data?.raw || generatePlan();
-        if (typeof plan === 'string') plan = generatePlan();
-        plan.languageName = plan.languageName || language?.name || 'Yoruba';
-        plan.language = plan.language || language?.id || 'yoruba';
-        plan.level = plan.level ?? level;
-        plan.reason = plan.reason ?? reason;
-        plan.focusArea = plan.focusArea ?? focusArea;
-        plan.dailyGoal = plan.dailyGoal ?? plan.dailyMinutes ?? Number(dailyGoal);
-        if (!Array.isArray(plan.lessons)) plan.lessons = [];
-        navigation.replace('PlanSummary', { plan });
+        try {
+          const resp = await api.post('/plans', payload, { timeout: 25000 });
+          let plan = resp.data?.data?.plan || resp.data?.data?.raw || generatePlan();
+          if (typeof plan === 'string') plan = generatePlan();
+          navigation.replace('PlanSummary', { plan: mergePlanFields(plan) });
+          return;
+        } catch (apiErr) {
+          console.warn('Plan API unavailable, using local plan:', apiErr?.message || apiErr);
+        }
+
+        navigation.replace('PlanSummary', { plan: mergePlanFields(generatePlan()) });
       } catch (err) {
-        console.error('Plan generation failed:', err);
-        Alert.alert('Error', 'Failed to create plan. Please try again.');
+        console.warn('Survey submit:', err?.message || err);
+        navigation.replace('PlanSummary', { plan: mergePlanFields(generatePlan()) });
       } finally {
         setLoading(false);
       }

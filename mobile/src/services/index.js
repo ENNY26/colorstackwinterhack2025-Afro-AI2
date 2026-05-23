@@ -9,3 +9,5 @@ export {
   tipsAPI
 } from './api';
 
+export { saveRoleplaySession, getRoleplaySessions, getRoleplaySessionById } from './roleplayHistory';
+

@@ -1,9 +1,16 @@
 /**
  * Roleplay scenario categories. IDs must match server CONVERSATION_TYPES.
+ * hasScenarios: if true, Roleplay opens a sub-screen to pick a scene (e.g. Making friends).
  */
 export const ROLEPLAY_CATEGORIES = [
   { id: 'greetings', label: 'Greetings & introductions', icon: 'hand-left' },
-  { id: 'making_friends', label: 'Making friends', icon: 'people' },
+  {
+    id: 'making_friends',
+    label: 'Making friends',
+    icon: 'people',
+    hasScenarios: true,
+    scenarioCategoryLabel: 'MAKING FRIENDS',
+  },
   { id: 'food', label: 'Food & dining', icon: 'restaurant' },
   { id: 'travel', label: 'Travel', icon: 'airplane' },
   { id: 'shopping', label: 'Shopping', icon: 'cart' },

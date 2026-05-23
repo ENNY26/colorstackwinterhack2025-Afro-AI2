@@ -1,12 +1,88 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { randomUUID } = require('crypto');
 const { body, validationResult } = require('express-validator');
 const { auth } = require('../middleware/auth');
 const { uploadAudio, uploadAudioToMemory, deleteUploadedFile } = require('../middleware/upload');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { whisperService, elevenLabsService } = require('../services');
+const { forwardPracticeRound, forwardTranscribe } = require('../services/speechServiceClient');
 const { AFRICAN_LANGUAGES } = require('../config/constants');
 
 const router = express.Router();
+
+/**
+ * TRANSCRIBE_PROVIDER (default local_first):
+ *   - local_first: FastAPI Whisper at AI_SPEECH_SERVICE_URL, then OpenAI
+ *   - openai_first: OpenAI, then local fallback
+ *   - local: only FastAPI (set DISABLE_LOCAL_TRANSCRIBE=0)
+ *   - openai: only OpenAI (no local fallback)
+ * DISABLE_LOCAL_TRANSCRIBE=1 skips all local attempts.
+ */
+async function transcribeWithProviders(filePath, languageHint) {
+  const raw = (process.env.TRANSCRIBE_PROVIDER || 'local_first').toLowerCase().replace(/-/g, '_');
+  const disableLocal = process.env.DISABLE_LOCAL_TRANSCRIBE === '1';
+  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
+
+  const tryLocal = async () => {
+    const r = await forwardTranscribe(filePath);
+    const t = String(r.text || '').trim();
+    if (!t) return null;
+    return { text: r.text, language: r.language };
+  };
+
+  const tryOpenAI = async () => {
+    if (!hasOpenAI) throw new Error('OPENAI_API_KEY is not set');
+    const r = await whisperService.transcribeAudio(filePath, languageHint);
+    const t = String(r.text || '').trim();
+    if (!t) return null;
+    return { text: r.text, language: r.language };
+  };
+
+  /** @type {{ name: string, fn: () => Promise<{text: string, language: string}|null> }[]} */
+  let steps = [];
+  switch (raw) {
+    case 'openai_first':
+      if (hasOpenAI) steps.push({ name: 'OpenAI', fn: tryOpenAI });
+      if (!disableLocal) steps.push({ name: 'local Whisper', fn: tryLocal });
+      break;
+    case 'local':
+      if (!disableLocal) steps.push({ name: 'local Whisper', fn: tryLocal });
+      break;
+    case 'openai':
+      if (hasOpenAI) steps.push({ name: 'OpenAI', fn: tryOpenAI });
+      break;
+    case 'local_first':
+    default:
+      if (!disableLocal) steps.push({ name: 'local Whisper', fn: tryLocal });
+      if (hasOpenAI) steps.push({ name: 'OpenAI', fn: tryOpenAI });
+      break;
+  }
+
+  if (!steps.length) {
+    throw new Error(
+      disableLocal && !hasOpenAI
+        ? 'No transcription provider available (DISABLE_LOCAL_TRANSCRIBE=1 and OPENAI_API_KEY unset)'
+        : 'No transcription provider configured for this request',
+    );
+  }
+
+  let lastErr = null;
+  for (const { name, fn } of steps) {
+    try {
+      const out = await fn();
+      if (out) return out;
+    } catch (e) {
+      console.warn(`[transcribe] ${name} failed:`, e.message);
+      lastErr = e;
+    }
+  }
+
+  if (lastErr) throw lastErr;
+  throw new Error('Transcription returned empty text from all providers');
+}
 
 /**
  * @route   POST /api/audio/transcribe
@@ -31,12 +107,13 @@ router.post('/transcribe', auth, uploadAudio.single('audio'), asyncHandler(async
   }
 
   const language = req.body.language;
-  
+
   try {
-    const { text, language: detectedLanguage } = await whisperService.transcribeAudio(
-      req.file.path,
-      language
-    );
+    const { text, language: detectedLanguage } = await transcribeWithProviders(req.file.path, language);
+
+    if (!text || !String(text).trim()) {
+      throw new Error('Transcription returned empty text');
+    }
 
     // Optionally delete the uploaded file after processing
     if (req.body.deleteAfterProcessing === 'true') {
@@ -93,20 +170,90 @@ router.post('/transcribe-buffer', auth, uploadAudioToMemory.single('audio'), asy
   }
 
   const language = req.body.language;
-  
-  const { text, language: detectedLanguage } = await whisperService.transcribeAudioBuffer(
-    req.file.buffer,
-    req.file.originalname,
-    language
-  );
+  const ext = path.extname(req.file.originalname || '') || '.webm';
+  const tmpPath = path.join(os.tmpdir(), `transcribe-${randomUUID()}${ext}`);
 
-  res.json({
-    success: true,
-    data: {
-      text,
-      language: detectedLanguage,
-    },
-  });
+  try {
+    fs.writeFileSync(tmpPath, req.file.buffer);
+    const { text, language: detectedLanguage } = await transcribeWithProviders(tmpPath, language);
+
+    res.json({
+      success: true,
+      data: {
+        text,
+        language: detectedLanguage,
+      },
+    });
+  } finally {
+    try {
+      if (tmpPath && fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch (e) {
+      /* ignore */
+    }
+  }
+}));
+
+/**
+ * @route   POST /api/audio/practice-round
+ * @desc    Transcribe + pronunciation score via FastAPI ai_speech_service (Whisper + difflib)
+ * @access  Private
+ */
+router.post('/practice-round', auth, uploadAudio.single('audio'), asyncHandler(async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: 'No audio file provided. Use field name "audio".',
+    });
+  }
+
+  const expected_text = (req.body.expected_text || req.body.expected || '').trim();
+  if (!expected_text) {
+    deleteUploadedFile(req.file.path);
+    return res.status(400).json({
+      success: false,
+      message: 'expected_text is required',
+    });
+  }
+
+  const mode = (req.body.mode || 'tutor').toLowerCase();
+  if (!['tutor', 'roleplay'].includes(mode)) {
+    deleteUploadedFile(req.file.path);
+    return res.status(400).json({
+      success: false,
+      message: 'mode must be "tutor" or "roleplay"',
+    });
+  }
+
+  try {
+    const data = await forwardPracticeRound(req.file.path, expected_text, mode);
+    deleteUploadedFile(req.file.path);
+    return res.json({
+      success: true,
+      data,
+    });
+  } catch (error) {
+    if (req.file && req.file.path) {
+      try {
+        deleteUploadedFile(req.file.path);
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    console.error('practice-round proxy error:', error.response?.data || error.message);
+    const detail = error.response?.data?.detail;
+    const msg = typeof detail === 'string'
+      ? detail
+      : (Array.isArray(detail) ? detail.map((d) => d.msg || d).join(' ') : null)
+      || error.message
+      || 'Speech service unavailable';
+    const status = error.response?.status && error.response.status < 600
+      ? error.response.status
+      : 503;
+    return res.status(status >= 400 && status < 600 ? status : 503).json({
+      success: false,
+      message: msg,
+    });
+  }
 }));
 
 /**

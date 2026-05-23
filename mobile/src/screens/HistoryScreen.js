@@ -11,6 +11,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
 import { conversationAPI } from '../services';
+import { navigateToConversationTab } from '../navigation/navigationHelpers';
 
 const HistoryScreen = ({ navigation }) => {
   const [conversations, setConversations] = useState([]);
@@ -66,11 +67,11 @@ const HistoryScreen = ({ navigation }) => {
 
   const handleResumeConversation = (conversation) => {
     console.log('Resume conversation:', conversation.id);
-    navigation.navigate('Conversation', {
-      language: { 
-        id: conversation.language, 
-        name: conversation.languageName || conversation.language, 
-        flag: conversation.flag || '🇳🇬' 
+    navigateToConversationTab(navigation, {
+      language: {
+        id: conversation.language,
+        name: conversation.languageName || conversation.language,
+        flag: conversation.flag || '🇳🇬',
       },
       conversationId: conversation.id,
     });
@@ -146,7 +147,7 @@ const HistoryScreen = ({ navigation }) => {
       </Text>
       <TouchableOpacity
         style={styles.startButton}
-        onPress={() => navigation.navigate('Conversation')}
+        onPress={() => navigateToConversationTab(navigation, {})}
       >
         <LinearGradient
           colors={COLORS.gradientOrange}

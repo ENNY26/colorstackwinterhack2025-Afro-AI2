@@ -15,6 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/colors';
 import { authAPI } from '../services';
+import { useAuth } from '../context/AuthContext';
 
 const LoginScreen = ({ navigation }) => {
   const [email, setEmail] = useState('');
@@ -22,6 +23,7 @@ const LoginScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState({});
+  const { setIsAuthenticated } = useAuth();
 
   const validateForm = () => {
     const newErrors = {};
@@ -72,6 +74,22 @@ const LoginScreen = ({ navigation }) => {
       
       const errorMessage = err.response?.data?.message || err.message || 'Failed to login. Please try again.';
       Alert.alert('Login Error', errorMessage);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleTryWithoutAccount = async () => {
+    setLoading(true);
+    try {
+      await authAPI.setGuestTrySession();
+      try {
+        await authAPI.ensureAuthenticated();
+      } catch (e) {
+        // Offline or server down — still allow exploring the app; some features need the backend.
+      }
+      setIsAuthenticated(true);
+      navigation.replace('LanguageSelection');
     } finally {
       setLoading(false);
     }
@@ -177,6 +195,15 @@ const LoginScreen = ({ navigation }) => {
               <Text style={styles.signupLink}>Sign Up</Text>
             </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            style={styles.tryAppButton}
+            onPress={handleTryWithoutAccount}
+            disabled={loading}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.tryAppText}>Try the app without signing in</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -289,6 +316,16 @@ const styles = StyleSheet.create({
     color: COLORS.primary,
     fontSize: FONT_SIZES.md,
     fontWeight: 'bold',
+  },
+  tryAppButton: {
+    marginTop: SPACING.xl,
+    paddingVertical: SPACING.md,
+    alignItems: 'center',
+  },
+  tryAppText: {
+    color: COLORS.textMuted,
+    fontSize: FONT_SIZES.sm,
+    textDecorationLine: 'underline',
   },
 });
 
