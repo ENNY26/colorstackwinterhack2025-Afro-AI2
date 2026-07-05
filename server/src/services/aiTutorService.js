@@ -12,10 +12,18 @@ const { AI_PERSONALITIES, AFRICAN_LANGUAGES, CONVERSATION_TYPES } = require('../
  * Example: CLAUDE_MODEL=claude-sonnet-4-5
  */
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// OpenAI client, created lazily so the server still starts without an
+// OPENAI_API_KEY (e.g. when using Anthropic for chat and Groq for transcription).
+let openaiClient = null;
+function getOpenAI() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set');
+  }
+  if (!openaiClient) {
+    openaiClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return openaiClient;
+}
 
 /**
  * Generate system prompt for AI tutor or roleplay NPC
@@ -35,12 +43,15 @@ const generateSystemPrompt = (language, personalityId, options = {}) => {
 Character vibe (only through natural speech in ${languageInfo.name}, never as a teacher): ${personality.description}
 
 ROLEPLAY RULES — follow strictly:
-1. Speak ONLY in ${languageInfo.name}. Do not use English anywhere in your reply — no English sentences, no English in parentheses, no translations, no glosses, no mixed-language lines.
+1. Speak ONLY in ${languageInfo.name}. Do not use English anywhere in your SPOKEN reply — no English sentences, no English in parentheses, no translations, no glosses, no mixed-language lines. (The only exception is the hidden vocab note described in rule 7.)
 2. Stay in the scene: short, natural replies like a real conversation. React to what the other person said.
-3. Do NOT act as a language tutor. Forbidden (never output these patterns): praise or feedback like "good job", "great job", "well done", "nice", "excellent", "perfect", "very good", "that's right", comments about what they "said" or "used" or "pronounced", tips like "try to" / "remember to", or any coaching tone. No *asterisks*, [brackets], or teacher asides.
+3. Do NOT act as a language tutor. Forbidden (never output these patterns): praise or feedback like "good job", "great job", "well done", "nice", "excellent", "perfect", "very good", "that's right", comments about what they "said" or "used" or "pronounced", tips like "try to" / "remember to", or any coaching tone. No *asterisks*, [brackets], or teacher asides in the spoken reply.
 4. If the user pasted a phrase from help / "I'm stuck" suggestions, treat it as their normal in-character line — answer in ${languageInfo.name} only, as the NPC would, with zero meta-commentary about the phrase.
 5. If the user is stuck or uses English, continue the scene in ${languageInfo.name} only (e.g. repeat a question, offer a simple choice).
-6. Keep each reply to a few sentences unless the scene needs more.`;
+6. Keep each reply to a few sentences unless the scene needs more.
+7. AFTER your spoken reply, on a brand-new final line, add a hidden vocab note listing up to 2 useful/new ${languageInfo.name} words you just used, in EXACTLY this format and nothing else:
+[[VOCAB]] word = short English meaning; word2 = short English meaning [[/VOCAB]]
+This line is stripped out before the user sees or hears it, so it never breaks the scene. It is the ONLY place English is allowed. Pick words a learner would benefit from. If you used no noteworthy words, output [[VOCAB]][[/VOCAB]].`;
   }
 
   return `You are an AI language tutor helping users learn ${languageInfo.name} (${languageInfo.nativeName}).
@@ -62,6 +73,26 @@ Important guidelines:
 Start conversations warmly with an appropriate greeting in ${languageInfo.name}.`;
 };
 
+/** Keep roleplay context small for faster LLM turns. */
+function trimConversationHistory(messages, maxMessages = 12) {
+  if (!messages || messages.length <= maxMessages) return messages;
+  return messages.slice(-maxMessages);
+}
+
+function getModelForMode(provider, mode) {
+  const isRoleplay = mode === 'roleplay';
+  if (provider === 'anthropic') {
+    if (isRoleplay) {
+      return process.env.CLAUDE_ROLEPLAY_MODEL || 'claude-haiku-4-5';
+    }
+    return process.env.CLAUDE_MODEL || 'claude-sonnet-4-5';
+  }
+  if (isRoleplay) {
+    return process.env.OPENAI_ROLEPLAY_MODEL || 'gpt-4o-mini';
+  }
+  return process.env.OPENAI_CHAT_MODEL || 'gpt-4-turbo-preview';
+}
+
 /**
  * Generate AI response using OpenAI GPT
  * @param {Array} messages - Conversation history
@@ -82,19 +113,23 @@ const generateResponseOpenAI = async (messages, language, personalityId, options
     ];
 
     const isRoleplay = options.mode === 'roleplay';
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4-turbo-preview',
+    const provider = 'openai';
+    const completion = await getOpenAI().chat.completions.create({
+      model: getModelForMode(provider, options.mode),
       messages: formattedMessages,
       temperature: isRoleplay ? 0.35 : 0.7,
-      max_tokens: 500,
+      max_tokens: isRoleplay ? 280 : 500,
       presence_penalty: isRoleplay ? 0 : 0.1,
       frequency_penalty: isRoleplay ? 0 : 0.1,
     });
 
-    const response = completion.choices[0].message.content;
+    const rawResponse = completion.choices[0].message.content;
 
-    // Extract vocabulary words from response
-    const vocabularyWords = extractVocabularyFromResponse(response, language);
+    const { response, vocabularyWords } = buildVocabResult(
+      rawResponse,
+      language,
+      options.mode
+    );
 
     return {
       response,
@@ -137,14 +172,14 @@ const generateResponseClaude = async (messages, language, personalityId, options
     // Use Claude 4.5 models - configurable via environment variable
     // Options: claude-sonnet-4-5, claude-haiku-4-5, claude-opus-4-5
     // Default: claude-sonnet-4-5 (best balance of speed and intelligence)
-    const claudeModel = process.env.CLAUDE_MODEL || 'claude-sonnet-4-5';
-    
+    const claudeModel = getModelForMode('anthropic', options.mode);
+
     const isRoleplay = options.mode === 'roleplay';
     const response = await axios.post(
       'https://api.anthropic.com/v1/messages',
       {
         model: claudeModel,
-        max_tokens: 500,
+        max_tokens: isRoleplay ? 280 : 500,
         temperature: isRoleplay ? 0.35 : 0.7,
         system: systemPrompt,
         messages: formattedMessages,
@@ -155,14 +190,19 @@ const generateResponseClaude = async (messages, language, personalityId, options
           'x-api-key': process.env.ANTHROPIC_API_KEY,
           'anthropic-version': '2023-06-01',
         },
+        timeout: isRoleplay ? 60000 : 120000,
       }
     );
 
     const aiResponse = response.data.content[0].text;
-    const vocabularyWords = extractVocabularyFromResponse(aiResponse, language);
+    const { response: cleanResponse, vocabularyWords } = buildVocabResult(
+      aiResponse,
+      language,
+      options.mode
+    );
 
     return {
-      response: aiResponse,
+      response: cleanResponse,
       vocabularyWords,
     };
   } catch (error) {
@@ -177,12 +217,14 @@ const generateResponseClaude = async (messages, language, personalityId, options
  */
 const generateResponse = async (messages, language, personalityId, options = {}) => {
   const provider = process.env.AI_PROVIDER || 'openai';
+  const history =
+    options.mode === 'roleplay' ? trimConversationHistory(messages) : messages;
 
   if (provider === 'anthropic') {
-    return generateResponseClaude(messages, language, personalityId, options);
+    return generateResponseClaude(history, language, personalityId, options);
   }
 
-  return generateResponseOpenAI(messages, language, personalityId, options);
+  return generateResponseOpenAI(history, language, personalityId, options);
 };
 
 /**
@@ -249,7 +291,7 @@ Keep suggestions simple and appropriate for the conversation context.`;
       return suggestions;
     } else {
       // Use OpenAI for suggestions
-      const completion = await openai.chat.completions.create({
+      const completion = await getOpenAI().chat.completions.create({
         model: 'gpt-4-turbo-preview',
         messages: [
           ...messages.map(msg => ({ role: msg.role, content: msg.content })),
@@ -267,6 +309,57 @@ Keep suggestions simple and appropriate for the conversation context.`;
     console.error('Failed to generate suggestions:', error);
     return [];
   }
+};
+
+/**
+ * Extract a hidden roleplay vocab note and strip it from the spoken reply.
+ * The roleplay model appends `[[VOCAB]] word = meaning; word2 = meaning [[/VOCAB]]`
+ * which we remove (so it's never shown/spoken) and turn into vocab entries.
+ * @returns {{ clean: string, vocabularyWords: Array<{word:string,translation:string,pronunciation:null}> }}
+ */
+const extractTaggedVocab = (response) => {
+  const vocabularyWords = [];
+  let clean = String(response || '');
+
+  const blockRe = /\[\[VOCAB\]\]([\s\S]*?)(?:\[\[\/VOCAB\]\]|$)/i;
+  const match = clean.match(blockRe);
+  if (match) {
+    const inner = match[1] || '';
+    clean = clean.replace(blockRe, '').trim();
+
+    for (const pair of inner.split(/[;\n]+/)) {
+      const eq = pair.indexOf('=');
+      if (eq === -1) continue;
+      const word = pair.slice(0, eq).trim();
+      const translation = pair.slice(eq + 1).trim();
+      if (
+        word.length > 1 &&
+        word.length < 50 &&
+        translation.length > 1 &&
+        translation.length < 100
+      ) {
+        vocabularyWords.push({ word, translation, pronunciation: null });
+      }
+    }
+  }
+
+  return { clean, vocabularyWords };
+};
+
+/**
+ * Turn a raw AI reply into the cleaned response + extracted vocab, per mode.
+ * - roleplay: parse + strip the hidden [[VOCAB]] note (keeps the scene immersive)
+ * - practice: extract `word (translation)` pairs inline as before
+ */
+const buildVocabResult = (rawResponse, language, mode) => {
+  if (mode === 'roleplay') {
+    const { clean, vocabularyWords } = extractTaggedVocab(rawResponse);
+    return { response: clean, vocabularyWords };
+  }
+  return {
+    response: rawResponse,
+    vocabularyWords: extractVocabularyFromResponse(rawResponse, language),
+  };
 };
 
 /**
@@ -374,7 +467,7 @@ Use markdown headings where helpful.`;
     return response.data.content[0].text.trim();
   }
 
-  const completion = await openai.chat.completions.create({
+  const completion = await getOpenAI().chat.completions.create({
     model: 'gpt-4-turbo-preview',
     messages: [
       {
@@ -393,7 +486,7 @@ Use markdown headings where helpful.`;
 
 const translateText = async (text, fromLanguage, toLanguage) => {
   try {
-    const completion = await openai.chat.completions.create({
+    const completion = await getOpenAI().chat.completions.create({
       model: 'gpt-4-turbo-preview',
       messages: [
         {

@@ -17,6 +17,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import HelpMeRespondModal from '../components/HelpMeRespondModal';
 import { conversationAPI, audioAPI, tipsAPI, vocabularyAPI, authAPI, API_BASE } from '../services';
 import { navigateRootStack } from '../navigation/navigationHelpers';
@@ -32,6 +33,8 @@ const STATES = {
 };
 
 const ConversationScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const raw = route.params || {};
   const routeParams =
     raw.params != null && typeof raw.screen === 'string' && typeof raw.params === 'object'
@@ -62,6 +65,7 @@ const ConversationScreen = ({ navigation, route }) => {
   const [conversationId, setConversationId] = useState(null);
   /** Same as conversationId; updated synchronously whenever the id changes (effects run too late mid-transcribe). */
   const conversationIdRef = useRef(null);
+  const sessionReadyRef = useRef(false);
   const assignConversationId = useCallback((id) => {
     conversationIdRef.current = id;
     setConversationId(id);
@@ -94,8 +98,10 @@ const ConversationScreen = ({ navigation, route }) => {
   // Initialize conversation and load cultural tips
   useEffect(() => {
     initializeConversation();
-    loadCulturalTips();
-    loadVocabularyStats();
+    if (!isRoleplay) {
+      loadCulturalTips();
+      loadVocabularyStats();
+    }
     
     return () => {
       // Cleanup audio on unmount
@@ -205,7 +211,8 @@ const ConversationScreen = ({ navigation, route }) => {
       
       if (result.success && result.data.conversation) {
         assignConversationId(result.data.conversation.id);
-        
+        sessionReadyRef.current = true;
+
         // Show initial AI greeting
         const initialMessage = result.data.conversation.messages[0];
         if (initialMessage && initialMessage.role === 'assistant') {
@@ -213,10 +220,12 @@ const ConversationScreen = ({ navigation, route }) => {
           if (!isRoleplay) {
             setShowTranscript(true);
           }
-          
-          // Play initial greeting audio if available
+
           if (initialMessage.audioUrl) {
             playAudio(initialMessage.audioUrl);
+          } else if (isRoleplay) {
+            setConversationState(STATES.AI_SPEAKING);
+            speakText(initialMessage.content, { skipBackendTts: true });
           }
           
           // Update vocabulary words
@@ -354,11 +363,11 @@ const ConversationScreen = ({ navigation, route }) => {
   };
 
   // Speak text using device TTS (fallback if backend TTS fails)
-  const speakText = async (text) => {
+  const speakText = async (text, options = {}) => {
+    const skipBackendTts = options.skipBackendTts === true;
     try {
       console.log('Speaking text:', text);
-      
-      // Stop any currently playing audio
+
       if (sound) {
         try {
           await sound.unloadAsync();
@@ -367,8 +376,7 @@ const ConversationScreen = ({ navigation, route }) => {
         }
       }
 
-      // Try to use backend TTS if available
-      if (conversationId) {
+      if (conversationId && !skipBackendTts) {
         try {
           const languageId = language?.id || 'yoruba';
           const synthesizeResult = await audioAPI.synthesize(text, 'normal', undefined, languageId);
@@ -582,9 +590,10 @@ const ConversationScreen = ({ navigation, route }) => {
       });
 
       // Start recording — set ref before setState so a quick release still processes audio
-      const { recording: newRecording } = await Audio.Recording.createAsync(
-        Audio.RecordingOptionsPresets.HIGH_QUALITY
-      );
+      const recordingPreset = isRoleplay
+        ? Audio.RecordingOptionsPresets.LOW_QUALITY
+        : Audio.RecordingOptionsPresets.HIGH_QUALITY;
+      const { recording: newRecording } = await Audio.Recording.createAsync(recordingPreset);
 
       recordingRef.current = newRecording;
       setRecording(newRecording);
@@ -671,200 +680,144 @@ const ConversationScreen = ({ navigation, route }) => {
 
       setConversationState(STATES.PROCESSING);
 
-      let transcribedText = null;
+      const fileType = Platform.OS === 'web' ? 'audio/webm' : 'audio/m4a';
+      const fileName = Platform.OS === 'web' ? 'recording.webm' : 'recording.m4a';
+      const audioFile = { uri, type: fileType, name: fileName };
+      const languageId = language?.id || 'yoruba';
 
-      // Step 1: Ensure authenticated
-      try {
-        await authAPI.ensureAuthenticated();
-      } catch (authErr) {
-        console.error('Authentication error:', authErr);
-        setConversationState(STATES.IDLE);
-        Alert.alert(
-          'Authentication Error',
-          'Failed to authenticate. Please ensure the backend server is running.'
-        );
-        return;
-      }
-
-      // Step 2: Transcribe audio
-      try {
-        console.log('Calling transcription API...');
-        console.log('Audio URI:', uri);
-        
-        // Determine file type based on platform
-        const fileType = Platform.OS === 'web' ? 'audio/webm' : 'audio/m4a';
-        const fileName = Platform.OS === 'web' ? 'recording.webm' : 'recording.m4a';
-        
-        const transcribeResult = await audioAPI.transcribe(
-          {
-            uri,
-            type: fileType,
-            name: fileName,
-          },
-          language?.id || 'yoruba'
-        );
-
-        const rawText =
-          transcribeResult.success && transcribeResult.data?.text != null
-            ? String(transcribeResult.data.text).trim()
-            : '';
-        if (rawText) {
-          transcribedText = rawText;
-          setTranscript(transcribedText);
-          console.log('Transcription successful:', transcribedText);
-        } else {
-          throw new Error(
-            transcribeResult.success ? 'No speech detected — try holding the button a bit longer.' : 'Failed to transcribe audio'
-          );
-        }
-      } catch (transcribeErr) {
-        console.error('Transcription API error:', transcribeErr);
-        setConversationState(STATES.IDLE);
-        
-        if (transcribeErr.response?.status === 401) {
-          // Try to re-authenticate
-          try {
-            await authAPI.ensureAuthenticated();
-            Alert.alert('Authentication Retry', 'Please try recording again.');
-          } catch (authRetryErr) {
-            Alert.alert(
-              'Authentication Required',
-              'Failed to authenticate. Please ensure the backend server is running.'
-            );
-          }
-        } else {
+      if (!sessionReadyRef.current) {
+        try {
+          await authAPI.ensureAuthenticated({ light: true });
+        } catch (authErr) {
+          console.error('Authentication error:', authErr);
+          setConversationState(STATES.IDLE);
           Alert.alert(
-            'Transcription Error',
-            transcribeErr.response?.data?.message ||
-              transcribeErr.message ||
-              'Failed to transcribe audio. Please try again.'
+            'Authentication Error',
+            'Failed to authenticate. Please ensure the backend server is running.'
           );
+          return;
         }
-        return;
       }
 
-      // Step 3: Resolve conversation id after transcribe (init may have completed while audio was uploading)
       let convId = conversationIdRef.current || conversationId;
       if (!convId) {
         try {
-          console.log('Creating new conversation...');
           const initResult = await conversationAPI.startConversation(...startConversationArgs());
-
           if (initResult.success && initResult.data.conversation) {
             convId = initResult.data.conversation.id;
             assignConversationId(convId);
-            console.log('Conversation created:', convId);
+            sessionReadyRef.current = true;
           } else {
             throw new Error('Failed to create conversation');
           }
         } catch (initErr) {
           console.error('Conversation initialization error:', initErr);
           setConversationState(STATES.IDLE);
-
-          if (initErr.response?.status === 401) {
-            try {
-              await authAPI.ensureAuthenticated();
-              Alert.alert('Authentication Retry', 'Please try recording again.');
-            } catch (authRetryErr) {
-              Alert.alert(
-                'Authentication Required',
-                'Failed to authenticate. Please ensure the backend server is running.'
-              );
-            }
-          } else {
-            Alert.alert(
-              'Error',
-              initErr.response?.data?.message || initErr.message || 'Failed to create conversation. Please try again.'
-            );
-          }
+          Alert.alert(
+            'Error',
+            initErr.response?.data?.message || initErr.message || 'Failed to create conversation.'
+          );
           return;
         }
       }
 
-      // Step 4: Send message to AI
-      if (convId && transcribedText) {
-        try {
-          console.log('Sending message to AI...');
-          const messageResult = await conversationAPI.sendMessage(convId, transcribedText);
+      if (!convId) {
+        setConversationState(STATES.IDLE);
+        return;
+      }
 
-          const data = messageResult?.data;
-          const aiMessage = data?.aiMessage || data?.assistantMessage;
-          const replyText =
-            aiMessage?.content ??
-            aiMessage?.text ??
-            (typeof aiMessage === 'string' ? aiMessage : '') ??
-            '';
-
-          if (messageResult.success && replyText) {
-            const vocab = aiMessage?.vocabularyWords;
-            const audioUrl = aiMessage?.audioUrl;
-
-            console.log('AI response received:', replyText);
-
-            setConversationState(STATES.AI_SPEAKING);
-            setTranscript(replyText);
-
-            if (Array.isArray(vocab) && vocab.length > 0) {
-              setVocabCount((prev) => prev + vocab.length);
-            }
-
-            if (audioUrl) {
-              console.log('Playing audio from URL:', audioUrl);
-              await playAudio(audioUrl);
-            } else {
-              console.log('No audio URL, synthesizing...');
-              try {
-                const languageId = language?.id || 'yoruba';
-                const synthesizeResult = await audioAPI.synthesize(
-                  replyText,
-                  'normal',
-                  undefined,
-                  languageId
-                );
-                if (synthesizeResult.success && synthesizeResult.data.audioUrl) {
-                  await playAudio(synthesizeResult.data.audioUrl);
-                } else {
-                  await speakText(replyText);
-                }
-              } catch (synthErr) {
-                console.error('Synthesis API error:', synthErr);
-                await speakText(replyText);
-              }
-            }
-          } else {
-            throw new Error(messageResult?.message || 'Failed to get AI response');
-          }
-        } catch (messageErr) {
-          console.error('Message API error:', messageErr);
-          setConversationState(STATES.IDLE);
-
-          if (messageErr.response?.status === 401) {
-            try {
-              await authAPI.ensureAuthenticated();
-              Alert.alert('Authentication Retry', 'Please try again.');
-            } catch (authRetryErr) {
-              Alert.alert(
-                'Authentication Required',
-                'Failed to authenticate. Please ensure the backend server is running.'
-              );
-            }
-          } else if (messageErr.response?.status === 404) {
-            Alert.alert('Error', 'Conversation not found. Please start a new conversation.');
-          } else {
-            Alert.alert(
-              'Error',
-              messageErr.response?.data?.message ||
-                messageErr.message ||
-                'Failed to get AI response. Please try again.'
+      try {
+        let messageResult;
+        if (isRoleplay) {
+          messageResult = await conversationAPI.sendVoiceMessage(convId, audioFile, languageId);
+        } else {
+          const transcribeResult = await audioAPI.transcribe(audioFile, languageId);
+          const rawText =
+            transcribeResult.success && transcribeResult.data?.text != null
+              ? String(transcribeResult.data.text).trim()
+              : '';
+          if (!rawText) {
+            throw new Error(
+              transcribeResult.success
+                ? 'No speech detected — try holding the button a bit longer.'
+                : 'Failed to transcribe audio'
             );
           }
+          setTranscript(rawText);
+          messageResult = await conversationAPI.sendMessage(convId, rawText);
         }
-      } else {
+
+        const data = messageResult?.data;
+        if (data?.transcription) {
+          setTranscript(data.transcription);
+        }
+        const aiMessage = data?.aiMessage || data?.assistantMessage;
+        const replyText =
+          aiMessage?.content ??
+          aiMessage?.text ??
+          (typeof aiMessage === 'string' ? aiMessage : '') ??
+          '';
+
+        if (messageResult.success && replyText) {
+          const vocab = aiMessage?.vocabularyWords;
+          const audioUrl = aiMessage?.audioUrl;
+
+          setConversationState(STATES.AI_SPEAKING);
+          setTranscript(replyText);
+
+          if (Array.isArray(vocab) && vocab.length > 0) {
+            setVocabCount((prev) => prev + vocab.length);
+          }
+
+          if (audioUrl) {
+            await playAudio(audioUrl);
+          } else if (isRoleplay) {
+            await speakText(replyText, { skipBackendTts: true });
+          } else {
+            try {
+              const synthesizeResult = await audioAPI.synthesize(
+                replyText,
+                'normal',
+                undefined,
+                languageId
+              );
+              if (synthesizeResult.success && synthesizeResult.data.audioUrl) {
+                await playAudio(synthesizeResult.data.audioUrl);
+              } else {
+                await speakText(replyText);
+              }
+            } catch {
+              await speakText(replyText);
+            }
+          }
+        } else {
+          throw new Error(messageResult?.message || 'Failed to get AI response');
+        }
+      } catch (messageErr) {
+        console.error('Message API error:', messageErr);
         setConversationState(STATES.IDLE);
-        Alert.alert(
-          'Cannot send',
-          'Missing conversation or transcription. Pull to refresh the screen or start again.'
-        );
+
+        const serverMsg = messageErr.response?.data?.message || '';
+        const isTranscribeFail =
+          /transcrib|no speech|connection error/i.test(serverMsg) ||
+          messageErr.code === 'ECONNABORTED';
+
+        if (messageErr.response?.status === 401) {
+          sessionReadyRef.current = false;
+          Alert.alert('Authentication Required', 'Please sign in again and retry.');
+        } else if (messageErr.response?.status === 404) {
+          Alert.alert('Error', 'Conversation not found. Please start a new conversation.');
+        } else if (isTranscribeFail) {
+          Alert.alert(
+            "Didn't catch that",
+            'Network was slow or no speech was detected. Hold the button, speak clearly, and try again.'
+          );
+        } else {
+          Alert.alert(
+            'Error',
+            serverMsg || messageErr.message || 'Failed to get AI response. Please try again.'
+          );
+        }
       }
     } catch (err) {
       console.error('Failed to process recording:', err);
@@ -1371,7 +1324,7 @@ const ConversationScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,

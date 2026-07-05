@@ -112,6 +112,41 @@ const culturalTipsData = [
     emoji: '🌍',
     difficulty: 'beginner',
   },
+  {
+    language: 'swahili',
+    tip: "'Karibu' means 'welcome' — and 'Karibu sana' means 'you're very welcome'!",
+    type: 'vocabulary',
+    emoji: '🙏',
+    difficulty: 'beginner',
+  },
+  {
+    language: 'swahili',
+    tip: "Respond to 'Habari?' (How are you?) with 'Nzuri' (good) — a friendly all-purpose reply.",
+    type: 'grammar',
+    emoji: '💬',
+    difficulty: 'beginner',
+  },
+  {
+    language: 'swahili',
+    tip: "Show respect to elders by using 'Shikamoo', answered with 'Marahaba'.",
+    type: 'etiquette',
+    emoji: '🤝',
+    difficulty: 'beginner',
+  },
+  {
+    language: 'swahili',
+    tip: "Swahili verbs change with prefixes: 'ninakula' (I am eating), 'unakula' (you are eating).",
+    type: 'pronunciation',
+    emoji: '📝',
+    difficulty: 'intermediate',
+  },
+  {
+    language: 'swahili',
+    tip: "Swahili is an official language of the African Union and several East African nations.",
+    type: 'culture',
+    emoji: '🌍',
+    difficulty: 'beginner',
+  },
   
   // Hausa tips
   {

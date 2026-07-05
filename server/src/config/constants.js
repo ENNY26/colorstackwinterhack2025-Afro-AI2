@@ -150,10 +150,33 @@ const VOICE_SPEEDS = {
   fast: 1.25,
 };
 
+/** Tribe / heritage language options (aligned with app languages). */
+const TRIBES = Object.keys(AFRICAN_LANGUAGES);
+
+/** Common nationalities for signup (free-text still allowed on client). */
+const NATIONALITIES = [
+  'Nigeria',
+  'Ghana',
+  'Kenya',
+  'South Africa',
+  'Ethiopia',
+  'Tanzania',
+  'Uganda',
+  'Senegal',
+  'Cameroon',
+  'Ivory Coast',
+  'United States',
+  'United Kingdom',
+  'Canada',
+  'Other',
+];
+
 module.exports = {
   AFRICAN_LANGUAGES,
   AI_PERSONALITIES,
   CONVERSATION_TYPES,
   VOICE_SPEEDS,
+  TRIBES,
+  NATIONALITIES,
 };
 

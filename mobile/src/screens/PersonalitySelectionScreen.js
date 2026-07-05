@@ -12,6 +12,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { FALLBACK_AI_PERSONALITIES } from '../constants/mockData';
 import { languagesAPI } from '../services';
 
@@ -19,6 +20,8 @@ const { width } = Dimensions.get('window');
 const CARD_WIDTH = width * 0.72;
 
 const PersonalitySelectionScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { language } = route.params || {};
   const [selectedPersonality, setSelectedPersonality] = useState(null);
   const [personalities, setPersonalities] = useState([]);
@@ -275,7 +278,7 @@ const PersonalitySelectionScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,

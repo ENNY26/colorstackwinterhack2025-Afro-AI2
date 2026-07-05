@@ -6,12 +6,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { View, StyleSheet } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, BORDER_RADIUS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { authAPI } from '../services';
 
 // Screens
 import OnboardingScreen from '../screens/OnboardingScreen';
 import LoginScreen from '../screens/LoginScreen';
 import SignupScreen from '../screens/SignupScreen';
+import VerifyPhoneScreen from '../screens/VerifyPhoneScreen';
 import LanguageSelectionScreen from '../screens/LanguageSelectionScreen';
 import PersonalitySelectionScreen from '../screens/PersonalitySelectionScreen';
 import SurveyScreen from '../screens/SurveyScreen';
@@ -34,6 +36,8 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs({ route }) {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   /**
    * Nested navigation passes { screen: 'Conversation', params: { conversationType, ... } }.
    * Tab screens must receive inner `params`, not the wrapper — otherwise ConversationScreen
@@ -132,15 +136,9 @@ function MainTabs({ route }) {
 }
 
 function AppNavigator({ isAuthenticated = false }) {
+  const { colors: COLORS } = useTheme();
   // Determine initial route based on authentication
-  const getInitialRoute = () => {
-    if (isAuthenticated) {
-      return "MainTabs";
-    }
-    // Show onboarding only on first launch, otherwise go to login
-    // For now, always go to login if not authenticated
-    return "Onboarding";
-  };
+  const getInitialRoute = () => (isAuthenticated ? 'MainTabs' : 'Login');
 
   return (
     <NavigationContainer>
@@ -170,7 +168,12 @@ function AppNavigator({ isAuthenticated = false }) {
           component={SignupScreen}
           options={{ animation: 'slide_from_right' }}
         />
-        
+        <Stack.Screen
+          name="VerifyPhone"
+          component={VerifyPhoneScreen}
+          options={{ animation: 'slide_from_right' }}
+        />
+
         {/* Language Selection (after auth) */}
         <Stack.Screen
           name="LanguageSelection"
@@ -238,7 +241,7 @@ function AppNavigator({ isAuthenticated = false }) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   activeTabIcon: {
     marginTop: -8,
   },

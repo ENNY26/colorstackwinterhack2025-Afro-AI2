@@ -4,6 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { ROLEPLAY_CATEGORIES } from '../constants/roleplayCategories';
 import { getRoleplayDisplayLabel } from '../constants/roleplayScenarios';
 import { getRoleplaySessions } from '../services/roleplayHistory';
@@ -32,6 +33,8 @@ function scenarioLabelForType(conversationType) {
 }
 
 const RoleplayHistoryScreen = ({ navigation }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -132,7 +135,7 @@ const RoleplayHistoryScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: 'row',

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { TUTOR_CATEGORIES } from '../constants/tutorPhrases';
 
 const CATEGORY_ICONS = {
@@ -24,6 +25,8 @@ const CATEGORY_ICONS = {
 };
 
 const TutorCategoriesScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { plan } = route.params || {};
   const langName = plan?.languageName || plan?.language || 'Yoruba';
 
@@ -79,7 +82,7 @@ const TutorCategoriesScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: 'row',

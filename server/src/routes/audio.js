@@ -7,82 +7,12 @@ const { body, validationResult } = require('express-validator');
 const { auth } = require('../middleware/auth');
 const { uploadAudio, uploadAudioToMemory, deleteUploadedFile } = require('../middleware/upload');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { whisperService, elevenLabsService } = require('../services');
-const { forwardPracticeRound, forwardTranscribe } = require('../services/speechServiceClient');
+const { whisperService, elevenLabsService, ttsService } = require('../services');
+const { forwardPracticeRound } = require('../services/speechServiceClient');
+const { transcribeWithProviders } = require('../services/transcribeProviders');
 const { AFRICAN_LANGUAGES } = require('../config/constants');
 
 const router = express.Router();
-
-/**
- * TRANSCRIBE_PROVIDER (default local_first):
- *   - local_first: FastAPI Whisper at AI_SPEECH_SERVICE_URL, then OpenAI
- *   - openai_first: OpenAI, then local fallback
- *   - local: only FastAPI (set DISABLE_LOCAL_TRANSCRIBE=0)
- *   - openai: only OpenAI (no local fallback)
- * DISABLE_LOCAL_TRANSCRIBE=1 skips all local attempts.
- */
-async function transcribeWithProviders(filePath, languageHint) {
-  const raw = (process.env.TRANSCRIBE_PROVIDER || 'local_first').toLowerCase().replace(/-/g, '_');
-  const disableLocal = process.env.DISABLE_LOCAL_TRANSCRIBE === '1';
-  const hasOpenAI = Boolean(process.env.OPENAI_API_KEY);
-
-  const tryLocal = async () => {
-    const r = await forwardTranscribe(filePath);
-    const t = String(r.text || '').trim();
-    if (!t) return null;
-    return { text: r.text, language: r.language };
-  };
-
-  const tryOpenAI = async () => {
-    if (!hasOpenAI) throw new Error('OPENAI_API_KEY is not set');
-    const r = await whisperService.transcribeAudio(filePath, languageHint);
-    const t = String(r.text || '').trim();
-    if (!t) return null;
-    return { text: r.text, language: r.language };
-  };
-
-  /** @type {{ name: string, fn: () => Promise<{text: string, language: string}|null> }[]} */
-  let steps = [];
-  switch (raw) {
-    case 'openai_first':
-      if (hasOpenAI) steps.push({ name: 'OpenAI', fn: tryOpenAI });
-      if (!disableLocal) steps.push({ name: 'local Whisper', fn: tryLocal });
-      break;
-    case 'local':
-      if (!disableLocal) steps.push({ name: 'local Whisper', fn: tryLocal });
-      break;
-    case 'openai':
-      if (hasOpenAI) steps.push({ name: 'OpenAI', fn: tryOpenAI });
-      break;
-    case 'local_first':
-    default:
-      if (!disableLocal) steps.push({ name: 'local Whisper', fn: tryLocal });
-      if (hasOpenAI) steps.push({ name: 'OpenAI', fn: tryOpenAI });
-      break;
-  }
-
-  if (!steps.length) {
-    throw new Error(
-      disableLocal && !hasOpenAI
-        ? 'No transcription provider available (DISABLE_LOCAL_TRANSCRIBE=1 and OPENAI_API_KEY unset)'
-        : 'No transcription provider configured for this request',
-    );
-  }
-
-  let lastErr = null;
-  for (const { name, fn } of steps) {
-    try {
-      const out = await fn();
-      if (out) return out;
-    } catch (e) {
-      console.warn(`[transcribe] ${name} failed:`, e.message);
-      lastErr = e;
-    }
-  }
-
-  if (lastErr) throw lastErr;
-  throw new Error('Transcription returned empty text from all providers');
-}
 
 /**
  * @route   POST /api/audio/transcribe
@@ -281,15 +211,16 @@ router.post('/synthesize', auth, [
     // Use language from request, or try to get from user's selected language
     const targetLanguage = language || req.user?.selectedLanguage || null;
     
-    const result = await elevenLabsService.textToSpeech(text, {
+    const result = await ttsService.synthesize(text, {
       speed: speed || req.user?.voiceSpeed || 'normal',
       voiceId,
-      language: targetLanguage, // Pass language for optimized pronunciation
+      language: targetLanguage, // Routes to cheapest capable provider (Azure/ElevenLabs)
     });
 
     res.json({
       success: true,
       data: {
+        // audioUrl may be null → client falls back to free device TTS
         audioUrl: result.audioUrl,
       },
     });

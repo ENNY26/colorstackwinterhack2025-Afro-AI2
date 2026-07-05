@@ -1,6 +1,8 @@
 // African-inspired color palette for Afro AI
 
-export const COLORS = {
+// Brand colors are shared across both themes; only the UI surfaces, text,
+// borders, gradients and overlays change between dark and light.
+const BRAND = {
   // Primary palette - Warm sunset oranges
   primary: '#E85A2B',
   primaryLight: '#FF8A65',
@@ -22,6 +24,28 @@ export const COLORS = {
   earthGreen: '#2D5016',
   earthRed: '#A52A2A',
 
+  // Status colors
+  success: '#17BF63',
+  successLight: '#1CE077',
+  error: '#E0245E',
+  errorLight: '#FF4081',
+  warning: '#FFAD1F',
+  info: '#1DA1F2',
+
+  // Conversation states
+  userSpeaking: '#1DA1F2',
+  aiSpeaking: '#17BF63',
+
+  // Brand gradients
+  gradientOrange: ['#E85A2B', '#FF8A65'],
+  gradientSunset: ['#E85A2B', '#FFB347', '#D4A84B'],
+  gradientOcean: ['#1A3A5C', '#20B2AA'],
+  gradientGold: ['#D4A84B', '#FFB347'],
+};
+
+export const DARK_COLORS = {
+  ...BRAND,
+
   // UI Colors
   background: '#0F1419',
   backgroundLight: '#1A2332',
@@ -38,41 +62,50 @@ export const COLORS = {
   border: '#2F3336',
   borderLight: '#3D4449',
 
-  // Status colors
-  success: '#17BF63',
-  successLight: '#1CE077',
-  error: '#E0245E',
-  errorLight: '#FF4081',
-  warning: '#FFAD1F',
-  info: '#1DA1F2',
-
-  // Conversation states
-  userSpeaking: '#1DA1F2',
-  aiSpeaking: '#17BF63',
   idle: '#536471',
 
-  // Gradient colors
-  gradientOrange: ['#E85A2B', '#FF8A65'],
-  gradientSunset: ['#E85A2B', '#FFB347', '#D4A84B'],
-  gradientOcean: ['#1A3A5C', '#20B2AA'],
+  // Theme-dependent gradient (app background)
   gradientNight: ['#0F1419', '#1A2332', '#2A3A4D'],
-  gradientGold: ['#D4A84B', '#FFB347'],
 
   // Overlay
   overlay: 'rgba(15, 20, 25, 0.85)',
   overlayLight: 'rgba(15, 20, 25, 0.5)',
-
-  // Light theme alternatives (for future dark mode toggle)
-  light: {
-    background: '#FFFFFF',
-    backgroundLight: '#F5F8FA',
-    surface: '#FFFFFF',
-    surfaceLight: '#E1E8ED',
-    text: '#14171A',
-    textSecondary: '#657786',
-    border: '#E1E8ED',
-  },
 };
+
+export const LIGHT_COLORS = {
+  ...BRAND,
+
+  // UI Colors
+  background: '#FFFFFF',
+  backgroundLight: '#F5F8FA',
+  surface: '#FFFFFF',
+  surfaceLight: '#EEF3F7',
+  surfaceLighter: '#E1E8ED',
+
+  // Text colors
+  text: '#14171A',
+  textSecondary: '#5B7083',
+  textMuted: '#8A9AA8',
+
+  // Borders
+  border: '#E1E8ED',
+  borderLight: '#D2DBE2',
+
+  idle: '#8A9AA8',
+
+  // Theme-dependent gradient (app background)
+  gradientNight: ['#FFFFFF', '#F5F8FA', '#EEF3F7'],
+
+  // Overlay
+  overlay: 'rgba(20, 23, 26, 0.55)',
+  overlayLight: 'rgba(20, 23, 26, 0.25)',
+};
+
+export const getColors = (theme) => (theme === 'light' ? LIGHT_COLORS : DARK_COLORS);
+
+// Default export kept as DARK for backward compatibility with any code that
+// imports the static COLORS directly (it simply won't react to theme changes).
+export const COLORS = DARK_COLORS;
 
 export const SPACING = {
   xs: 4,

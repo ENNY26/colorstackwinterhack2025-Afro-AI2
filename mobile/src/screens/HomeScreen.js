@@ -13,6 +13,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { getGreetingForLanguage, getRandomFunFact } from '../constants/homeGreetings';
 import { conversationAPI, vocabularyAPI, languagesAPI, userAPI } from '../services';
 import { navigateRootStack } from '../navigation/navigationHelpers';
@@ -27,6 +28,8 @@ const FALLBACK_HOME_LANGUAGE = {
 };
 
 const HomeScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const plan = route.params?.plan;
   const [selectedLanguage, setSelectedLanguage] = useState(null);
   const [recentConversations, setRecentConversations] = useState([]);
@@ -448,7 +451,7 @@ const HomeScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,

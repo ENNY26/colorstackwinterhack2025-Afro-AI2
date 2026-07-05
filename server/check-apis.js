@@ -47,6 +47,18 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.includes('your-')) {
   console.log('✅ JWT_SECRET: Configured');
 }
 
+// Twilio Verify (phone OTP)
+const twilioOk =
+  process.env.TWILIO_ACCOUNT_SID &&
+  process.env.TWILIO_AUTH_TOKEN &&
+  process.env.TWILIO_VERIFY_SERVICE_SID &&
+  !process.env.TWILIO_ACCOUNT_SID.includes('your-');
+if (!twilioOk) {
+  console.log('⚠️  Twilio Verify: Not configured (dev OTP fallback: 123456)');
+} else {
+  console.log('✅ Twilio Verify: Configured');
+}
+
 // Check AI Provider
 const aiProvider = process.env.AI_PROVIDER || 'anthropic';
 console.log(`📊 AI_PROVIDER: ${aiProvider}`);

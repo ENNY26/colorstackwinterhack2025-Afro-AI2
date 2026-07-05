@@ -2,8 +2,11 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 
 const ModeSelectionScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { plan } = route.params || {};
 
   return (
@@ -35,7 +38,7 @@ const ModeSelectionScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   title: { fontSize: FONT_SIZES.xxl, fontWeight: 'bold', color: COLORS.text, marginBottom: SPACING.sm },
   subtitle: { color: COLORS.textSecondary, marginBottom: SPACING.lg },

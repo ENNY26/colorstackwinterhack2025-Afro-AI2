@@ -3,11 +3,14 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { ROLEPLAY_CATEGORIES } from '../constants/roleplayCategories';
 import { getRoleplayDisplayLabel } from '../constants/roleplayScenarios';
 import { saveRoleplaySession } from '../services/roleplayHistory';
 
 const RoleplaySummaryScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const {
     summary,
     userMessages = [],
@@ -203,7 +206,7 @@ const RoleplaySummaryScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   content: { padding: SPACING.lg, paddingTop: 60, paddingBottom: SPACING.xxl },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACING.lg },

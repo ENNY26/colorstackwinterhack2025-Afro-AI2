@@ -11,11 +11,14 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { ONBOARDING_SLIDES } from '../constants/mockData';
 
 const { width, height } = Dimensions.get('window');
 
 const OnboardingScreen = ({ navigation }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [currentIndex, setCurrentIndex] = useState(0);
   const flatListRef = useRef(null);
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -213,7 +216,7 @@ const OnboardingScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,

@@ -181,37 +181,42 @@ const getVoiceIdForLanguage = (language, overrideVoiceId) => {
  * @param {Object} options.voiceSettings - Custom voice settings to override defaults
  * @returns {Promise<{audioUrl: string, audioBuffer: Buffer}>}
  */
-const textToSpeech = async (text, options = {}) => {
+/**
+ * Synthesize speech and return the raw MP3 buffer WITHOUT writing a file.
+ * Used by the TTS router so it can cache audio under a deterministic name.
+ * @returns {Promise<{audioBuffer: Buffer, voiceId: string, modelId: string, voiceSettings: Object}>}
+ */
+const synthesizeBuffer = async (text, options = {}) => {
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+  const modelId = options.modelId || process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+  const language = options.language || null;
+  const voiceId = getVoiceIdForLanguage(language, options.voiceId);
+  const speedOption = options.speed || 'normal';
+
+  if (!apiKey || apiKey.includes('your-')) {
+    throw new Error('ELEVENLABS_API_KEY not configured in .env file');
+  }
+
+  if (!voiceId || voiceId.includes('your-')) {
+    throw new Error('ELEVENLABS_VOICE_ID (or language-specific voice env) not configured in .env file');
+  }
+
+  const normalizedText = normalizeTextForPronunciation(text, language);
+
+  const voiceSettings = getVoiceSettingsForLanguage(
+    language,
+    options.voiceSettings || {},
+    speedOption
+  );
+
+  logVoiceSettings('synthesizeBuffer', voiceSettings, {
+    language,
+    voiceId,
+    modelId,
+    textLength: normalizedText?.length,
+  });
+
   try {
-    const apiKey = process.env.ELEVENLABS_API_KEY;
-    const modelId = options.modelId || process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
-    const language = options.language || null;
-    const voiceId = getVoiceIdForLanguage(language, options.voiceId);
-    const speedOption = options.speed || 'normal';
-
-    if (!apiKey || apiKey.includes('your-')) {
-      throw new Error('ELEVENLABS_API_KEY not configured in .env file');
-    }
-
-    if (!voiceId || voiceId.includes('your-')) {
-      throw new Error('ELEVENLABS_VOICE_ID (or language-specific voice env) not configured in .env file');
-    }
-
-    const normalizedText = normalizeTextForPronunciation(text, language);
-
-    const voiceSettings = getVoiceSettingsForLanguage(
-      language,
-      options.voiceSettings || {},
-      speedOption
-    );
-
-    logVoiceSettings('textToSpeech', voiceSettings, {
-      language,
-      voiceId,
-      modelId,
-      textLength: normalizedText?.length,
-    });
-
     const response = await axios.post(
       `${ELEVENLABS_API_URL}/text-to-speech/${voiceId}`,
       {
@@ -229,22 +234,10 @@ const textToSpeech = async (text, options = {}) => {
       }
     );
 
-    const audioBuffer = Buffer.from(response.data);
-
-    const audioDir = process.env.AUDIO_UPLOAD_DIR || './uploads/audio';
-    const filename = `tts_${uuidv4()}.mp3`;
-    const filePath = path.join(audioDir, filename);
-
-    if (!fs.existsSync(audioDir)) {
-      fs.mkdirSync(audioDir, { recursive: true });
-    }
-
-    fs.writeFileSync(filePath, audioBuffer);
-
     return {
-      audioUrl: `/uploads/audio/${filename}`,
-      audioBuffer,
-      filePath,
+      audioBuffer: Buffer.from(response.data),
+      voiceId,
+      modelId,
       voiceSettings,
     };
   } catch (error) {
@@ -295,6 +288,32 @@ const textToSpeech = async (text, options = {}) => {
       throw new Error(`Failed to generate speech: ${errorMessage}`);
     }
   }
+};
+
+/**
+ * Convert text to speech and persist it as an MP3 file (random name).
+ * Kept for backward compatibility; the TTS router uses synthesizeBuffer + caching.
+ * @returns {Promise<{audioUrl: string, audioBuffer: Buffer, filePath: string, voiceSettings: Object}>}
+ */
+const textToSpeech = async (text, options = {}) => {
+  const { audioBuffer, voiceSettings } = await synthesizeBuffer(text, options);
+
+  const audioDir = process.env.AUDIO_UPLOAD_DIR || './uploads/audio';
+  const filename = `tts_${uuidv4()}.mp3`;
+  const filePath = path.join(audioDir, filename);
+
+  if (!fs.existsSync(audioDir)) {
+    fs.mkdirSync(audioDir, { recursive: true });
+  }
+
+  fs.writeFileSync(filePath, audioBuffer);
+
+  return {
+    audioUrl: `/uploads/audio/${filename}`,
+    audioBuffer,
+    filePath,
+    voiceSettings,
+  };
 };
 
 /**
@@ -422,10 +441,12 @@ const generatePronunciation = async (word, language) => {
 
 module.exports = {
   textToSpeech,
+  synthesizeBuffer,
   textToSpeechStream,
   getAvailableVoices,
   getSubscriptionInfo,
   generatePronunciation,
   getEnvVoiceSettings,
   getVoiceSettingsForLanguage,
+  getVoiceIdForLanguage,
 };

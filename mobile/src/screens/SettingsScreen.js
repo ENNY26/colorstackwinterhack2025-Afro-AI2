@@ -7,17 +7,20 @@ import {
   ScrollView,
   Switch,
   Alert,
+  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
-import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
 import { authAPI } from '../services';
 import { useAuth } from '../context/AuthContext';
-import { navigateRootStack, resetToLogin } from '../navigation/navigationHelpers';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
+import { navigateRootStack } from '../navigation/navigationHelpers';
 
 const SettingsScreen = ({ navigation }) => {
+  const { colors: COLORS, isDark, toggleTheme } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [voiceSpeed, setVoiceSpeed] = useState(1); // 0.5, 1, 1.5
-  const [darkMode, setDarkMode] = useState(true);
   const [selectedLanguage] = useState({ name: 'Yoruba', flag: '🇳🇬' });
   const [selectedPersonality] = useState({ name: 'Friendly & Casual', emoji: '😊' });
 
@@ -28,36 +31,34 @@ const SettingsScreen = ({ navigation }) => {
     setVoiceSpeed(speed);
   };
 
-  const handleThemeToggle = (value) => {
-    console.log('Theme toggled:', value ? 'Dark' : 'Light');
-    setDarkMode(value);
+  const performSignOut = async () => {
+    try {
+      await authAPI.logout();
+    } catch (error) {
+      console.error('Logout error:', error);
+    }
+    setIsAuthenticated(false);
   };
 
-  const handleSignOut = async () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to sign out?',
-      [
-        {
-          text: 'Cancel',
-          style: 'cancel',
+  const handleSignOut = () => {
+    // Alert.alert with multiple buttons is unreliable on web
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && window.confirm('Are you sure you want to sign out?')) {
+        performSignOut();
+      }
+      return;
+    }
+
+    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign Out',
+        style: 'destructive',
+        onPress: () => {
+          performSignOut();
         },
-        {
-          text: 'Sign Out',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await authAPI.logout();
-            } catch (error) {
-              console.error('Logout error:', error);
-            } finally {
-              setIsAuthenticated(false);
-              resetToLogin(navigation);
-            }
-          },
-        },
-      ]
-    );
+      },
+    ]);
   };
 
 
@@ -171,15 +172,15 @@ const SettingsScreen = ({ navigation }) => {
         <SectionHeader title="APPEARANCE" />
         <View style={styles.section}>
           <SettingItem
-            icon="moon"
+            icon={isDark ? 'moon' : 'sunny'}
             title="Dark Mode"
             showChevron={false}
             rightElement={
               <Switch
-                value={darkMode}
-                onValueChange={handleThemeToggle}
+                value={isDark}
+                onValueChange={toggleTheme}
                 trackColor={{ false: COLORS.border, true: COLORS.primary + '80' }}
-                thumbColor={darkMode ? COLORS.primary : COLORS.textMuted}
+                thumbColor={isDark ? COLORS.primary : COLORS.surface}
               />
             }
           />
@@ -224,7 +225,7 @@ const SettingsScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: COLORS.background,

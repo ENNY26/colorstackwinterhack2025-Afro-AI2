@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { MAKING_FRIENDS_SCENARIOS } from '../constants/roleplayScenarios';
 
 const SCENARIOS_BY_CATEGORY = {
@@ -10,6 +11,8 @@ const SCENARIOS_BY_CATEGORY = {
 };
 
 const RoleplayScenariosScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { plan, category, language, personality, sessionMinutes } = route.params || {};
   const langName = plan?.languageName || language?.name || 'Yoruba';
   const headerTitle = category?.scenarioCategoryLabel || 'CHOOSE A SCENARIO';
@@ -91,7 +94,7 @@ const RoleplayScenariosScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   headerBlock: { paddingTop: 56, paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm },
   headerTopRow: { flexDirection: 'row', alignItems: 'flex-start' },

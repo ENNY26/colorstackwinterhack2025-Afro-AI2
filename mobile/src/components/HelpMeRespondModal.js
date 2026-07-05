@@ -16,11 +16,14 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { audioAPI, API_BASE } from '../services';
 
 const { height } = Dimensions.get('window');
 
 const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses, language }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const slideAnim = useRef(new Animated.Value(height)).current;
   const overlayOpacity = useRef(new Animated.Value(0)).current;
   const [playingIndex, setPlayingIndex] = useState(null);
@@ -286,7 +289,7 @@ const HelpMeRespondModal = ({ visible, onClose, onSelectResponse, responses, lan
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: {
     flex: 1,
     justifyContent: 'flex-end',

@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, FlatList } from 'react-native
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { ROLEPLAY_CATEGORIES } from '../constants/roleplayCategories';
 
 const LANGUAGE_FLAGS = {
@@ -17,6 +18,8 @@ const LANGUAGE_FLAGS = {
 };
 
 const RoleplayCategoriesScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { plan } = route.params || {};
   const langId = plan?.language || 'yoruba';
   const langName = plan?.languageName || 'Yoruba';
@@ -93,7 +96,7 @@ const RoleplayCategoriesScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   headerBlock: { paddingTop: 56, paddingHorizontal: SPACING.lg, paddingBottom: SPACING.sm },
   header: {

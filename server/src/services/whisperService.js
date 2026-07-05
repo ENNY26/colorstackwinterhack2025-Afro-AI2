@@ -3,12 +3,27 @@ const fs = require('fs');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** OpenAI client: long timeout + SDK-level retries help with flaky TLS (ECONNRESET). */
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-  timeout: 180000,
-  maxRetries: 2,
-});
+/**
+ * OpenAI client for Whisper. Created lazily so the server still starts when
+ * OPENAI_API_KEY is absent (e.g. when using Groq for transcription instead).
+ * Short timeout + no SDK retries so a flaky network fails in seconds (user can
+ * retry) instead of hanging ~99s on connection errors. Tune with
+ * WHISPER_TIMEOUT_MS (default 25s).
+ */
+let openaiClient = null;
+function getOpenAI() {
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY is not set');
+  }
+  if (!openaiClient) {
+    openaiClient = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+      timeout: parseInt(process.env.WHISPER_TIMEOUT_MS, 10) || 25000,
+      maxRetries: 0,
+    });
+  }
+  return openaiClient;
+}
 
 function isConnectionError(err) {
   const msg = String(err?.message || '').toLowerCase();
@@ -44,7 +59,7 @@ const transcribeAudio = async (audioFilePath, language = null) => {
   };
 
   const whisperLanguage = language ? languageMap[language] : null;
-  const maxAttempts = 3;
+  const maxAttempts = 2;
   let lastErr;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -61,7 +76,7 @@ const transcribeAudio = async (audioFilePath, language = null) => {
         transcriptionOptions.language = whisperLanguage;
       }
 
-      const response = await openai.audio.transcriptions.create(transcriptionOptions);
+      const response = await getOpenAI().audio.transcriptions.create(transcriptionOptions);
 
       return {
         text: response.text,
@@ -76,7 +91,7 @@ const transcribeAudio = async (audioFilePath, language = null) => {
 
       const retryable = attempt < maxAttempts && isConnectionError(error);
       if (retryable) {
-        await sleep(600 * attempt);
+        await sleep(400);
         continue;
       }
 
@@ -121,7 +136,7 @@ const transcribeAudioBuffer = async (audioBuffer, filename, language = null) => 
         transcriptionOptions.language = whisperLanguage;
       }
 
-      const response = await openai.audio.transcriptions.create(transcriptionOptions);
+      const response = await getOpenAI().audio.transcriptions.create(transcriptionOptions);
 
       return {
         text: response.text,

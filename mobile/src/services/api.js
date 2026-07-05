@@ -13,6 +13,14 @@ import Constants from 'expo-constants';
 // You can override the API URL by setting this environment variable
 // For Android emulator issues, try using your local IP instead of 10.0.2.2
 // Example: EXPO_PUBLIC_API_URL=http://192.168.1.100:5000
+function normalizeApiBase(url) {
+  let base = String(url).trim().replace(/\/+$/, '');
+  if (base.endsWith('/api')) {
+    base = base.slice(0, -4);
+  }
+  return base;
+}
+
 const getApiBase = () => {
   if (!__DEV__) {
     return 'https://your-production-url.com';
@@ -26,23 +34,34 @@ const getApiBase = () => {
 
   // Explicit override for physical device / CI (not used on web or we'd use it above)
   if (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_API_URL) {
-    return process.env.EXPO_PUBLIC_API_URL;
+    return normalizeApiBase(process.env.EXPO_PUBLIC_API_URL);
+  }
+
+  // Expo Go / dev client on a PHYSICAL device: the Expo packager host is your
+  // computer's LAN IP (e.g. 192.168.1.209). Use it so the phone can reach the
+  // server. This must come before the Android 10.0.2.2 branch, which is
+  // emulator-only. A localhost/127.0.0.1 host means we're on an emulator/sim.
+  try {
+    const debuggerHost =
+      Constants.expoConfig?.hostUri ||
+      Constants.expoGoConfig?.debuggerHost ||
+      Constants.manifest?.debuggerHost ||
+      Constants.manifest2?.extra?.expoGo?.debuggerHost ||
+      Constants.expoConfig?.extra?.hostUri;
+    if (debuggerHost) {
+      const host = debuggerHost.split(':')[0];
+      const isLoopback = host === 'localhost' || host === '127.0.0.1';
+      if (host && !isLoopback) {
+        return `http://${host}:5000`;
+      }
+    }
+  } catch (e) {
+    // ignore
   }
 
   // Android emulator: 10.0.2.2 is the only reliable way to reach the host.
   if (Platform.OS === 'android') {
     return 'http://10.0.2.2:5000';
-  }
-
-  // iOS Simulator / Expo Go on phone: use debugger host IP so physical devices can connect
-  try {
-    const debuggerHost = Constants.manifest?.debuggerHost || Constants.expoConfig?.extra?.hostUri || Constants.manifest2?.debuggerHost;
-    if (debuggerHost) {
-      const host = debuggerHost.split(':')[0];
-      return `http://${host}:5000`;
-    }
-  } catch (e) {
-    // ignore
   }
 
   if (Platform.OS === 'ios') {
@@ -61,7 +80,7 @@ const API_DEBUG =
   typeof process !== 'undefined' &&
   process.env?.EXPO_PUBLIC_API_DEBUG === '1';
 
-if (API_DEBUG) {
+if (typeof __DEV__ !== 'undefined' && __DEV__) {
   console.log(`[API] Using base URL: ${API_BASE} (Platform: ${Platform.OS})`);
 }
 
@@ -145,7 +164,7 @@ api.interceptors.response.use(
     }
 
     if (error.response?.status === 401) {
-      await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY]);
+      await AsyncStorage.multiRemove([TOKEN_KEY, USER_KEY, GUEST_TRY_KEY]);
       clearAuthTokenMemory();
     }
 
@@ -158,27 +177,59 @@ api.interceptors.response.use(
 /** Single in-flight guest registration so parallel ensureAuthenticated() calls do not stack requests. */
 let ensureAuthInFlight = null;
 
+async function persistAuthSession(data) {
+  await AsyncStorage.removeItem(GUEST_TRY_KEY);
+  await AsyncStorage.setItem(TOKEN_KEY, data.token);
+  await AsyncStorage.setItem(USER_KEY, JSON.stringify(data.user));
+  setAuthTokenMemory(data.token);
+}
+
 export const authAPI = {
   register: async (data, axiosConfig = {}) => {
     const { timeout = 30000, ...rest } = axiosConfig;
     const response = await api.post('/auth/register', data, { timeout, ...rest });
-    if (response.data.success) {
-      await AsyncStorage.removeItem(GUEST_TRY_KEY);
-      await AsyncStorage.setItem(TOKEN_KEY, response.data.data.token);
-      await AsyncStorage.setItem(USER_KEY, JSON.stringify(response.data.data.user));
-      setAuthTokenMemory(response.data.data.token);
+    return response.data;
+  },
+
+  confirmPhoneSignup: async (pendingToken, code) => {
+    const response = await api.post('/auth/verify/phone/confirm', { pendingToken, code });
+    if (response.data.success && response.data.data?.token) {
+      await persistAuthSession(response.data.data);
     }
+    return response.data;
+  },
+
+  resendPhoneCode: async (pendingToken) => {
+    const response = await api.post('/auth/verify/phone/resend', { pendingToken });
     return response.data;
   },
 
   login: async (email, password) => {
     const response = await api.post('/auth/login', { email, password });
-    if (response.data.success) {
-      await AsyncStorage.removeItem(GUEST_TRY_KEY);
-      await AsyncStorage.setItem(TOKEN_KEY, response.data.data.token);
-      await AsyncStorage.setItem(USER_KEY, JSON.stringify(response.data.data.user));
-      setAuthTokenMemory(response.data.data.token);
+    if (response.data.success && response.data.data?.token) {
+      await persistAuthSession(response.data.data);
     }
+    return response.data;
+  },
+
+  confirmLoginOtp: async (pendingToken, code) => {
+    const response = await api.post('/auth/login/confirm', { pendingToken, code });
+    if (response.data.success && response.data.data?.token) {
+      await persistAuthSession(response.data.data);
+    }
+    return response.data;
+  },
+
+  registerGuest: async () => {
+    const response = await api.post('/auth/guest', {}, { timeout: 15000 });
+    if (response.data.success && response.data.data?.token) {
+      await persistAuthSession(response.data.data);
+    }
+    return response.data;
+  },
+
+  getSignupOptions: async () => {
+    const response = await api.get('/auth/config/signup-options');
     return response.data;
   },
 
@@ -217,7 +268,7 @@ export const authAPI = {
   },
 
   // Auto-register guest user for testing/development
-  ensureAuthenticated: async () => {
+  ensureAuthenticated: async (options = {}) => {
     if (ensureAuthInFlight) {
       return ensureAuthInFlight;
     }
@@ -226,6 +277,9 @@ export const authAPI = {
       try {
         const token = await getAuthTokenCached();
         if (token) {
+          if (options.light) {
+            return true;
+          }
           try {
             await api.get('/auth/me', { timeout: 8000 });
             return true;
@@ -235,19 +289,8 @@ export const authAPI = {
           }
         }
 
-        const guestEmail = `guest_${Date.now()}@afrolingo.app`;
-        const guestPassword = 'guest_' + Math.random().toString(36).substring(2, 15);
-        const guestName = 'Guest User';
-
         console.log('Auto-registering guest user for testing...');
-        const result = await authAPI.register(
-          {
-            email: guestEmail,
-            password: guestPassword,
-            name: guestName,
-          },
-          { timeout: 15000 }
-        );
+        const result = await authAPI.registerGuest();
 
         if (result.success) {
           console.log('Guest user registered successfully');
@@ -256,8 +299,10 @@ export const authAPI = {
         console.warn('Failed to auto-register guest:', result.message);
         return false;
       } catch (err) {
-        if (err.response?.status === 409) {
-          console.warn('Guest registration conflict (409).');
+        const status = err.response?.status;
+        const msg = err.response?.data?.message || '';
+        if (status === 409 || (status === 400 && msg.includes('already registered'))) {
+          console.warn('Guest registration conflict.');
           return false;
         }
         console.warn('Error ensuring authentication:', err?.message || err);
@@ -321,6 +366,46 @@ export const conversationAPI = {
       { content },
       { timeout: 120000 }
     );
+    return response.data;
+  },
+
+  /** One request: transcribe audio + AI reply (faster roleplay). */
+  sendVoiceMessage: async (conversationId, audioFile, language) => {
+    const formData = new FormData();
+
+    if (Platform.OS === 'web') {
+      try {
+        let blob;
+        const u = audioFile.uri;
+        if (u.startsWith('blob:') || u.startsWith('data:')) {
+          const response = await fetch(u);
+          blob = await response.blob();
+        } else {
+          const response = await fetch(u);
+          blob = await response.blob();
+        }
+        const mimeType = blob.type || audioFile.type || 'audio/webm';
+        const file = new File([blob], audioFile.name || 'recording.webm', { type: mimeType });
+        formData.append('audio', file);
+      } catch (err) {
+        throw new Error(`Failed to prepare audio: ${err.message}`);
+      }
+    } else {
+      formData.append('audio', {
+        uri: audioFile.uri,
+        type: audioFile.type || 'audio/m4a',
+        name: audioFile.name || 'recording.m4a',
+      });
+    }
+
+    if (language) {
+      formData.append('language', language);
+    }
+
+    const response = await api.post(`/conversations/${conversationId}/voice-message`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 150000,
+    });
     return response.data;
   },
 

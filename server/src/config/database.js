@@ -1,5 +1,44 @@
 const mongoose = require('mongoose');
 
+let reconnectInFlight = null;
+
+/** True when Mongoose has an active connection. */
+function isDbConnected() {
+  return mongoose.connection.readyState === 1;
+}
+
+/**
+ * Attempt to restore MongoDB if the connection dropped (e.g. Atlas timeout).
+ * Used by auth routes before returning 503.
+ */
+async function ensureConnected() {
+  if (isDbConnected()) return true;
+
+  const mongoUri = process.env.MONGODB_URI;
+  if (!mongoUri) return false;
+
+  if (reconnectInFlight) return reconnectInFlight;
+
+  reconnectInFlight = mongoose
+    .connect(mongoUri, {
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+    })
+    .then(() => {
+      console.log(`✅ MongoDB reconnected: ${mongoose.connection.host}`);
+      return true;
+    })
+    .catch((err) => {
+      console.warn('⚠️  MongoDB reconnect failed:', err.message);
+      return false;
+    })
+    .finally(() => {
+      reconnectInFlight = null;
+    });
+
+  return reconnectInFlight;
+}
+
 const connectDB = async (retries = 5, delay = 5000) => {
   const mongoUri = process.env.MONGODB_URI;
   
@@ -71,4 +110,6 @@ const connectDB = async (retries = 5, delay = 5000) => {
 };
 
 module.exports = connectDB;
+module.exports.isDbConnected = isDbConnected;
+module.exports.ensureConnected = ensureConnected;
 

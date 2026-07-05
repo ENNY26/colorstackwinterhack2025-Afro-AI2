@@ -3,9 +3,12 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS, SHADOWS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { userAPI } from '../services';
 
 const StreakStatsScreen = ({ navigation }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -148,7 +151,7 @@ const StreakStatsScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background, padding: SPACING.lg, paddingTop: 60 },
   headerRow: { flexDirection: 'row', alignItems: 'center', marginBottom: SPACING.lg },
   backButton: {

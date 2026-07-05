@@ -5,10 +5,76 @@ const User = require('../models/User');
 const Vocabulary = require('../models/Vocabulary');
 const { auth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { aiTutorService, elevenLabsService } = require('../services');
+const { aiTutorService, ttsService } = require('../services');
+const { transcribeWithProviders } = require('../services/transcribeProviders');
+const { uploadAudio, deleteUploadedFile } = require('../middleware/upload');
 const { AI_PERSONALITIES, AFRICAN_LANGUAGES, CONVERSATION_TYPES } = require('../config/constants');
 
 const router = express.Router();
+
+/**
+ * Generate ElevenLabs audio for ALL modes (including roleplay) so African
+ * languages are actually spoken — device TTS can't pronounce them.
+ * Set ROLEPLAY_SKIP_SERVER_TTS=true only if you intentionally want device TTS.
+ */
+function shouldSkipServerTts() {
+  return process.env.ROLEPLAY_SKIP_SERVER_TTS === 'true';
+}
+
+async function generateAssistantReply(conversation, userContent, req) {
+  conversation.addMessage('user', userContent);
+
+  const conversationHistory = conversation.messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({ role: m.role, content: m.content }));
+
+  const aiMode = conversation.conversationType ? 'roleplay' : 'practice';
+
+  const { response: aiResponse, vocabularyWords } = await aiTutorService.generateResponse(
+    conversationHistory,
+    conversation.language,
+    conversation.personality,
+    { mode: aiMode }
+  );
+
+  let audioUrl = null;
+  if (!shouldSkipServerTts()) {
+    try {
+      const audioResult = await ttsService.synthesize(aiResponse, {
+        speed: req.user?.voiceSpeed || 'normal',
+        language: conversation.language,
+      });
+      audioUrl = audioResult.audioUrl;
+    } catch (audioError) {
+      console.warn('⚠️ TTS failed (client will use fallback):', audioError.message);
+    }
+  }
+
+  conversation.addMessage('assistant', aiResponse, { audioUrl, vocabularyWords });
+  await conversation.save();
+
+  if (vocabularyWords.length > 0 && req.user?._id) {
+    const userId = req.user._id;
+    const lang = conversation.language;
+    const convId = conversation._id;
+    const wordCount = vocabularyWords.length;
+    setImmediate(() => {
+      saveVocabularyWords(userId, lang, vocabularyWords, convId).catch((err) =>
+        console.error('Background vocab save failed:', err)
+      );
+      User.findByIdAndUpdate(userId, { $inc: { 'stats.wordsLearned': wordCount } }).catch((err) =>
+        console.error('Background user stats update failed:', err)
+      );
+    });
+  }
+
+  return {
+    userContent,
+    aiResponse,
+    audioUrl,
+    vocabularyWords,
+  };
+}
 
 /**
  * @route   POST /api/conversations
@@ -64,19 +130,18 @@ router.post('/', auth, [
     { mode: aiMode }
   );
 
-  // Generate audio for greeting
   let audioUrl = null;
-  try {
-    const voiceSpeed = req.user?.voiceSpeed || 'normal';
-    const audioResult = await elevenLabsService.textToSpeech(greeting, {
-      speed: voiceSpeed,
-      language: language, // Pass language for optimized Yoruba/African language pronunciation
-    });
-    audioUrl = audioResult.audioUrl;
-    console.log('✅ Successfully generated audio for greeting');
-  } catch (audioError) {
-    console.warn('⚠️ Failed to generate audio with ElevenLabs (will use device TTS as fallback):', audioError.message);
-    // Continue without audio - frontend will use device TTS as fallback
+  if (!shouldSkipServerTts()) {
+    try {
+      const voiceSpeed = req.user?.voiceSpeed || 'normal';
+      const audioResult = await ttsService.synthesize(greeting, {
+        speed: voiceSpeed,
+        language,
+      });
+      audioUrl = audioResult.audioUrl;
+    } catch (audioError) {
+      console.warn('⚠️ Greeting TTS failed (client fallback):', audioError.message);
+    }
   }
 
   // Add system message and greeting
@@ -152,57 +217,96 @@ router.post('/:id/message', auth, [
   }
 
   const { content } = req.body;
-
-  // Add user message
-  conversation.addMessage('user', content);
-
-  // Get conversation history for AI (exclude system messages for context)
-  const conversationHistory = conversation.messages
-    .filter(m => m.role !== 'system')
-    .map(m => ({ role: m.role, content: m.content }));
-
-  const aiMode = conversation.conversationType ? 'roleplay' : 'practice';
-
-  // Generate AI response
-  const { response: aiResponse, vocabularyWords } = await aiTutorService.generateResponse(
-    conversationHistory,
-    conversation.language,
-    conversation.personality,
-    { mode: aiMode }
+  const { userContent, aiResponse, audioUrl, vocabularyWords } = await generateAssistantReply(
+    conversation,
+    content,
+    req
   );
-
-  // Generate audio for response
-  let audioUrl = null;
-  try {
-    const audioResult = await elevenLabsService.textToSpeech(aiResponse, {
-      speed: req.user?.voiceSpeed || 'normal',
-      language: conversation.language, // Pass language for optimized pronunciation
-    });
-    audioUrl = audioResult.audioUrl;
-    console.log('✅ Successfully generated audio for AI response');
-  } catch (audioError) {
-    console.warn('⚠️ Failed to generate audio with ElevenLabs (will use device TTS as fallback):', audioError.message);
-    // Continue without audio - frontend will use device TTS as fallback
-  }
-
-  // Add AI response
-  conversation.addMessage('assistant', aiResponse, { audioUrl, vocabularyWords });
-
-  await conversation.save();
-
-  // Save vocabulary words
-  if (vocabularyWords.length > 0 && req.user?._id) {
-    await saveVocabularyWords(req.user._id, conversation.language, vocabularyWords, conversation._id);
-    req.user.stats.wordsLearned += vocabularyWords.length;
-    await req.user.save();
-  }
 
   res.json({
     success: true,
     data: {
       userMessage: {
         role: 'user',
-        content,
+        content: userContent,
+        timestamp: new Date(),
+      },
+      aiMessage: {
+        role: 'assistant',
+        content: aiResponse,
+        audioUrl,
+        vocabularyWords,
+        timestamp: new Date(),
+      },
+    },
+  });
+}));
+
+/**
+ * @route   POST /api/conversations/:id/voice-message
+ * @desc    Transcribe audio + AI reply in one request (faster roleplay turns)
+ * @access  Private
+ */
+router.post('/:id/voice-message', auth, uploadAudio.single('audio'), [
+  param('id').isMongoId().withMessage('Invalid conversation ID'),
+], asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      message: 'Validation failed',
+      errors: errors.array(),
+    });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: 'No audio file provided',
+    });
+  }
+
+  const conversation = await Conversation.findOne({
+    _id: req.params.id,
+    ...(req.user?._id ? { user: req.user._id } : {}),
+  });
+
+  if (!conversation) {
+    deleteUploadedFile(req.file.path);
+    return res.status(404).json({ success: false, message: 'Conversation not found' });
+  }
+
+  if (conversation.status !== 'active') {
+    deleteUploadedFile(req.file.path);
+    return res.status(400).json({ success: false, message: 'Conversation is not active' });
+  }
+
+  const language = req.body.language || conversation.language;
+  let transcribedText = '';
+
+  try {
+    const { text } = await transcribeWithProviders(req.file.path, language);
+    transcribedText = String(text || '').trim();
+    if (!transcribedText) {
+      throw new Error('No speech detected');
+    }
+  } finally {
+    deleteUploadedFile(req.file.path);
+  }
+
+  const { userContent, aiResponse, audioUrl, vocabularyWords } = await generateAssistantReply(
+    conversation,
+    transcribedText,
+    req
+  );
+
+  res.json({
+    success: true,
+    data: {
+      transcription: transcribedText,
+      userMessage: {
+        role: 'user',
+        content: userContent,
         timestamp: new Date(),
       },
       aiMessage: {

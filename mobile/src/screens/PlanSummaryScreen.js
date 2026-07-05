@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-nati
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 
 const LABEL_REASON = {
   travel: 'Travel',
@@ -23,6 +24,8 @@ const LABEL_FOCUS = {
 };
 
 const PlanSummaryScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { plan } = route.params || {};
   const categories = (plan?.lessons || []).map((l) => l.title).filter(Boolean);
 
@@ -65,7 +68,7 @@ const PlanSummaryScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   content: { padding: SPACING.lg, paddingTop: 80, paddingBottom: SPACING.xxl },
   title: { fontSize: FONT_SIZES.xxl, fontWeight: 'bold', color: COLORS.text, marginBottom: SPACING.sm },

@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const { TRIBES } = require('../config/constants');
 
 const userSchema = new mongoose.Schema({
   email: {
@@ -11,11 +12,18 @@ const userSchema = new mongoose.Schema({
     trim: true,
     match: [/^\S+@\S+\.\S+$/, 'Please provide a valid email'],
   },
+  phone: {
+    type: String,
+    unique: true,
+    sparse: true,
+    trim: true,
+    default: null,
+  },
   password: {
     type: String,
     required: [true, 'Password is required'],
     minlength: [6, 'Password must be at least 6 characters'],
-    select: false, // Don't include password in queries by default
+    select: false,
   },
   name: {
     type: String,
@@ -23,15 +31,31 @@ const userSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Name cannot exceed 100 characters'],
   },
+  tribe: {
+    type: String,
+    enum: TRIBES,
+    default: 'yoruba',
+  },
+  nationality: {
+    type: String,
+    trim: true,
+    maxlength: [80],
+    default: null,
+  },
+  age: {
+    type: Number,
+    min: [13, 'You must be at least 13 years old'],
+    max: [120, 'Please enter a valid age'],
+    default: null,
+  },
   avatar: {
     type: String,
     default: null,
   },
-  
-  // Learning preferences
+
   selectedLanguage: {
     type: String,
-    enum: ['yoruba', 'swahili', 'hausa', 'zulu', 'amharic', 'igbo', 'xhosa', 'akan'],
+    enum: TRIBES,
     default: 'yoruba',
   },
   aiPersonality: {
@@ -44,8 +68,7 @@ const userSchema = new mongoose.Schema({
     enum: ['slow', 'normal', 'fast'],
     default: 'normal',
   },
-  
-  // Progress tracking
+
   stats: {
     totalConversations: { type: Number, default: 0 },
     totalMinutesPracticed: { type: Number, default: 0 },
@@ -54,8 +77,7 @@ const userSchema = new mongoose.Schema({
     longestStreak: { type: Number, default: 0 },
     lastPracticeDate: { type: Date, default: null },
   },
-  
-  // Account settings
+
   theme: {
     type: String,
     enum: ['light', 'dark'],
@@ -65,18 +87,25 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
-  
-  // Account status
+
   isActive: {
     type: Boolean,
     default: true,
   },
+  phoneVerified: {
+    type: Boolean,
+    default: false,
+  },
+  emailVerified: {
+    type: Boolean,
+    default: false,
+  },
+  /** @deprecated use phoneVerified — kept for compatibility */
   isVerified: {
     type: Boolean,
     default: false,
   },
-  
-  // Timestamps
+
   lastLoginAt: {
     type: Date,
     default: null,
@@ -85,30 +114,25 @@ const userSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-// Index for faster queries
-// Note: email index is automatically created by unique: true
 userSchema.index({ selectedLanguage: 1 });
 
-// Hash password before saving
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function preSave(next) {
   if (!this.isModified('password')) {
     return next();
   }
-  
+
   const salt = await bcrypt.genSalt(12);
   this.password = await bcrypt.hash(this.password, salt);
   next();
 });
 
-// Compare password method
-userSchema.methods.comparePassword = async function(candidatePassword) {
-  return await bcrypt.compare(candidatePassword, this.password);
+userSchema.methods.comparePassword = async function comparePassword(candidatePassword) {
+  return bcrypt.compare(candidatePassword, this.password);
 };
 
-// Generate JWT token
-userSchema.methods.generateAuthToken = function() {
+userSchema.methods.generateAuthToken = function generateAuthToken() {
   return jwt.sign(
-    { 
+    {
       id: this._id,
       email: this.email,
     },
@@ -117,37 +141,30 @@ userSchema.methods.generateAuthToken = function() {
   );
 };
 
-// Update streak based on practice
-userSchema.methods.updateStreak = function() {
+userSchema.methods.updateStreak = function updateStreak() {
   const now = new Date();
   const lastPractice = this.stats.lastPracticeDate;
-  
+
   if (!lastPractice) {
     this.stats.currentStreak = 1;
   } else {
     const hoursDiff = (now - lastPractice) / (1000 * 60 * 60);
-    
-    if (hoursDiff < 24) {
-      // Same day, no change
-    } else if (hoursDiff < 48) {
-      // Next day, increment streak
+
+    if (hoursDiff >= 24 && hoursDiff < 48) {
       this.stats.currentStreak += 1;
-    } else {
-      // Streak broken
+    } else if (hoursDiff >= 48) {
       this.stats.currentStreak = 1;
     }
   }
-  
-  // Update longest streak if needed
+
   if (this.stats.currentStreak > this.stats.longestStreak) {
     this.stats.longestStreak = this.stats.currentStreak;
   }
-  
+
   this.stats.lastPracticeDate = now;
 };
 
-// Hide sensitive fields when converting to JSON
-userSchema.methods.toJSON = function() {
+userSchema.methods.toJSON = function toJSON() {
   const user = this.toObject();
   delete user.password;
   delete user.__v;
@@ -155,4 +172,3 @@ userSchema.methods.toJSON = function() {
 };
 
 module.exports = mongoose.model('User', userSchema);
-

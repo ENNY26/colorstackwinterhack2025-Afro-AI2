@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 
 const connectDB = require('./config/database');
+const { isDbConnected } = connectDB;
 const errorHandler = require('./middleware/errorHandler');
 
 // Import routes
@@ -159,9 +160,13 @@ app.use('/uploads', (req, res, next) => {
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Afro AI Server is running',
+  const dbConnected = isDbConnected();
+  res.status(dbConnected ? 200 : 503).json({
+    success: dbConnected,
+    message: dbConnected
+      ? 'Afro AI Server is running'
+      : 'Server is up but MongoDB is not connected',
+    database: dbConnected ? 'connected' : 'disconnected',
     timestamp: new Date().toISOString(),
     environment: process.env.NODE_ENV,
   });

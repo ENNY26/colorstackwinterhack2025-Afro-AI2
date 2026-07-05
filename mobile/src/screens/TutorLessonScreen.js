@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/colors';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
 import { audioAPI, authAPI, API_BASE } from '../services';
 import { getPhrasesForCategory } from '../constants/tutorPhrases';
 
@@ -37,6 +38,8 @@ function getPhrases(plan, langId, category) {
 }
 
 const TutorLessonScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
   const { plan, category } = route.params || {};
   const langId = (plan?.language || 'yoruba').toLowerCase();
   const langName = plan?.languageName || 'Yoruba';
@@ -381,7 +384,7 @@ const TutorLessonScreen = ({ navigation, route }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background },
   header: {
     flexDirection: 'row',

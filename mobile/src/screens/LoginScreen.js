@@ -14,11 +14,14 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, FONT_SIZES, BORDER_RADIUS } from '../constants/colors';
-import { authAPI } from '../services';
+import { useTheme, useThemedStyles } from '../context/ThemeContext';
+import { authAPI, API_BASE } from '../services';
 import { useAuth } from '../context/AuthContext';
 
-const LoginScreen = ({ navigation }) => {
-  const [email, setEmail] = useState('');
+const LoginScreen = ({ navigation, route }) => {
+  const { colors: COLORS } = useTheme();
+  const styles = useThemedStyles(makeStyles);
+  const [email, setEmail] = useState(route?.params?.email ?? '');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -52,16 +55,25 @@ const LoginScreen = ({ navigation }) => {
     setLoading(true);
     try {
       const result = await authAPI.login(email.trim(), password);
-      
-      if (result.success) {
-        // Navigate to language selection first, then main app
+
+      if (result.success && result.data?.requiresLoginOtp) {
+        navigation.navigate('VerifyPhone', {
+          pendingToken: result.data.pendingToken,
+          phone: result.data.phone,
+          mode: 'login',
+        });
+        return;
+      }
+
+      if (result.success && result.data?.token) {
+        setIsAuthenticated(true);
         navigation.replace('LanguageSelection');
       } else {
         Alert.alert('Login Failed', result.message || 'Invalid email or password');
       }
     } catch (err) {
-      console.error('Login error:', err);
-      
+      const status = err.response?.status;
+
       // Handle network errors specifically
       if (err.code === 'NETWORK_ERROR' || err.message === 'Network Error' || !err.response) {
         Alert.alert(
@@ -72,6 +84,33 @@ const LoginScreen = ({ navigation }) => {
         return;
       }
       
+      if (err.response?.status === 404) {
+        Alert.alert(
+          'Server Not Found',
+          `The login endpoint was not found. Make sure the backend is running at ${API_BASE} and try again.`
+        );
+        return;
+      }
+
+      if (status === 503) {
+        Alert.alert(
+          'Database Unavailable',
+          'The server cannot reach MongoDB (Atlas). In MongoDB Atlas → Network Access, add your current IP or 0.0.0.0/0 for development, then restart the server (npm run dev). Check http://localhost:5000/health — it should say database: connected.'
+        );
+        return;
+      }
+
+      if (status === 403 && err.response?.data?.code === 'PHONE_NOT_VERIFIED') {
+        const d = err.response.data.data || {};
+        navigation.navigate('VerifyPhone', {
+          pendingToken: d.pendingToken,
+          phone: d.phone,
+          mode: 'signup',
+        });
+        return;
+      }
+
+      console.error('Login error:', err);
       const errorMessage = err.response?.data?.message || err.message || 'Failed to login. Please try again.';
       Alert.alert('Login Error', errorMessage);
     } finally {
@@ -210,7 +249,7 @@ const LoginScreen = ({ navigation }) => {
   );
 };
 
-const styles = StyleSheet.create({
+const makeStyles = (COLORS) => StyleSheet.create({
   container: {
     flex: 1,
   },
